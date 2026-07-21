@@ -1,0 +1,107 @@
+﻿{
+    "cursor":  "CgwIk8r60gYQyJuelwESHktYTUxCR0FNRS0yNkpVTDIzMTg0MEtDREVULURFVA",
+    "markets":  [
+                    {
+                        "can_close_early":  true,
+                        "close_time":  "2026-07-26T22:40:00Z",
+                        "created_time":  "2026-07-20T22:45:39.317165Z",
+                        "custom_strike":  {
+                                              "baseball_team":  "1fd1359b-d478-46ab-9ea7-612d671951d6"
+                                          },
+                        "early_close_condition":  "This market will close and expire after a winner is declared.",
+                        "event_ticker":  "KXMLBGAME-26JUL231840KCDET",
+                        "expected_expiration_time":  "2026-07-24T01:40:00Z",
+                        "expiration_time":  "2026-07-26T22:40:00Z",
+                        "expiration_value":  "",
+                        "last_price_dollars":  "0.4100",
+                        "latest_expiration_time":  "2026-07-26T22:40:00Z",
+                        "liquidity_dollars":  "0.0000",
+                        "market_type":  "binary",
+                        "no_ask_dollars":  "0.6200",
+                        "no_bid_dollars":  "0.6000",
+                        "no_sub_title":  "Kansas City",
+                        "notional_value_dollars":  "1.0000",
+                        "occurrence_datetime":  "2026-07-24T01:40:00Z",
+                        "open_interest_fp":  "287.40",
+                        "open_time":  "2026-07-20T22:55:00Z",
+                        "previous_price_dollars":  "0.0000",
+                        "previous_yes_ask_dollars":  "0.0000",
+                        "previous_yes_bid_dollars":  "0.0000",
+                        "price_level_structure":  "linear_cent",
+                        "price_ranges":  [
+                                             {
+                                                 "end":  "1.0000",
+                                                 "start":  "0.0000",
+                                                 "step":  "0.0100"
+                                             }
+                                         ],
+                        "result":  "",
+                        "rules_primary":  "If Kansas City wins the Kansas City vs Detroit professional baseball game originally scheduled for Jul 23, 2026 at 6:40 PM EDT, then the market resolves to Yes.",
+                        "rules_secondary":  "The following market refers to the Kansas City vs Detroit professional baseball game originally scheduled for Jul 23, 2026 at 6:40 PM EDT. If this game is postponed or delayed, the market will remain open and close after the rescheduled game has finished (within two days). If the game is cancelled or rescheduled to over two days away, the market will resolve to a fair price in accordance with the rules.\n\nKalshi is not affiliated, associated, authorized, endorsed by, or in any way officially connected with the Governing League. All trademarks, logos, and brand names are the property of their respective owners.",
+                        "settlement_timer_seconds":  120,
+                        "status":  "active",
+                        "strike_type":  "structured",
+                        "ticker":  "KXMLBGAME-26JUL231840KCDET-KC",
+                        "title":  "Kansas City vs Detroit Winner?",
+                        "updated_time":  "2026-07-20T22:55:00.010642Z",
+                        "volume_24h_fp":  "328.38",
+                        "volume_fp":  "328.38",
+                        "yes_ask_dollars":  "0.4000",
+                        "yes_ask_size_fp":  "45.00",
+                        "yes_bid_dollars":  "0.3800",
+                        "yes_bid_size_fp":  "45.00",
+                        "yes_sub_title":  "Kansas City"
+                    },
+                    {
+                        "can_close_early":  true,
+                        "close_time":  "2026-07-26T22:40:00Z",
+                        "created_time":  "2026-07-20T22:45:39.317165Z",
+                        "custom_strike":  {
+                                              "baseball_team":  "8905d233-d4fc-485d-9df7-3092bb192b3e"
+                                          },
+                        "early_close_condition":  "This market will close and expire after a winner is declared.",
+                        "event_ticker":  "KXMLBGAME-26JUL231840KCDET",
+                        "expected_expiration_time":  "2026-07-24T01:40:00Z",
+                        "expiration_time":  "2026-07-26T22:40:00Z",
+                        "expiration_value":  "",
+                        "last_price_dollars":  "0.5800",
+                        "latest_expiration_time":  "2026-07-26T22:40:00Z",
+                        "liquidity_dollars":  "0.0000",
+                        "market_type":  "binary",
+                        "no_ask_dollars":  "0.4300",
+                        "no_bid_dollars":  "0.4000",
+                        "no_sub_title":  "Detroit",
+                        "notional_value_dollars":  "1.0000",
+                        "occurrence_datetime":  "2026-07-24T01:40:00Z",
+                        "open_interest_fp":  "207.39",
+                        "open_time":  "2026-07-20T22:55:00Z",
+                        "previous_price_dollars":  "0.0000",
+                        "previous_yes_ask_dollars":  "0.0000",
+                        "previous_yes_bid_dollars":  "0.0000",
+                        "price_level_structure":  "linear_cent",
+                        "price_ranges":  [
+                                             {
+                                                 "end":  "1.0000",
+                                                 "start":  "0.0000",
+                                                 "step":  "0.0100"
+                                             }
+                                         ],
+                        "result":  "",
+                        "rules_primary":  "If Detroit wins the Kansas City vs Detroit professional baseball game originally scheduled for Jul 23, 2026 at 6:40 PM EDT, then the market resolves to Yes.",
+                        "rules_secondary":  "The following market refers to the Kansas City vs Detroit professional baseball game originally scheduled for Jul 23, 2026 at 6:40 PM EDT. If this game is postponed or delayed, the market will remain open and close after the rescheduled game has finished (within two days). If the game is cancelled or rescheduled to over two days away, the market will resolve to a fair price in accordance with the rules.\n\nKalshi is not affiliated, associated, authorized, endorsed by, or in any way officially connected with the Governing League. All trademarks, logos, and brand names are the property of their respective owners.",
+                        "settlement_timer_seconds":  120,
+                        "status":  "active",
+                        "strike_type":  "structured",
+                        "ticker":  "KXMLBGAME-26JUL231840KCDET-DET",
+                        "title":  "Kansas City vs Detroit Winner?",
+                        "updated_time":  "2026-07-20T22:55:00.010642Z",
+                        "volume_24h_fp":  "207.39",
+                        "volume_fp":  "207.39",
+                        "yes_ask_dollars":  "0.6000",
+                        "yes_ask_size_fp":  "5.96",
+                        "yes_bid_dollars":  "0.5700",
+                        "yes_bid_size_fp":  "2740.00",
+                        "yes_sub_title":  "Detroit"
+                    }
+                ]
+}

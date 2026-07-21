@@ -1,1 +1,9 @@
 To-Do.md
+venv/
+__pycache__/
+*.pyc
+data/
+build/
+dist/
+.pytest_cache/
+reference/kalshi_strategies.txt

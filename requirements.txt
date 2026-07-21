@@ -1,0 +1,22 @@
+# Core UI + async
+PySide6>=6.6
+qasync>=0.27
+websockets>=12.0
+keyring>=24.0
+httpx>=0.27
+truststore>=0.9
+pyqtgraph>=0.13
+qtawesome>=1.4
+
+# Polymarket live execution — CLOB V2 (2026-04-28 migration); ang lumang
+# py-clob-client ay tinatanggihan na ng server ("invalid order version")
+py-clob-client-v2>=1.0
+
+# Kalshi API v2 auth — RSA-PSS SHA256 request signing
+cryptography>=42
+
+# Candlestick chart (lazy-loaded kapag pinili ang "Candles" sa poly dashboard)
+finplot>=1.9
+
+# ET timezone data para sa hourly Polymarket market slugs (zoneinfo sa Windows)
+tzdata>=2024.1
