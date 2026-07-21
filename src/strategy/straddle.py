@@ -110,7 +110,7 @@ def is_candidate(
             return False, f"{side} book empty"
         mid = (bid + ask) / 2.0
         if not (cfg.min_entry_cents <= mid <= cfg.max_entry_cents):
-            return False, (f"{side} mid {mid:.0f}¢ outside "
+            return False, (f"{side} mid {mid:.1f}¢ outside "
                            f"{cfg.min_entry_cents}-{cfg.max_entry_cents}¢ band")
     return True, "50/50 band, liquid, in time window"
 
