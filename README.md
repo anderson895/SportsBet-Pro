@@ -2,6 +2,66 @@
 
 Isang Windows desktop trading bot na may DALAWANG independent na panel:
 
+---
+
+## 📌 Progress / Status (as of 2026-07-22)
+
+### Development Phases
+- [x] **Phase 1: Skeleton** — copy verbatim files, ScopedDatabase, dual-panel UI shell, stub engines
+- [x] **Phase 2: Polymarket port** — feed/strategy/execution, PolyEngine, poly dashboard + settings, port tests
+- [x] **Phase 3: Kalshi paper** — client, straddle math/state machine, KalshiEngine, kalshi UI, tests
+- [ ] **Phase 4: Kalshi live** — RSA-PSS auth, authed endpoints, live executor, demo-env validation
+      *(nakasulat na ang code; ang demo/prod validation na lang ang kulang)*
+- [ ] **Phase 5: Packaging** — PyInstaller build ng SportsBetPro.exe
+      *(handa na ang spec/icon/README; ang build na lang ang kulang)*
+
+### ✅ Tapos at VERIFIED na gumagana
+- **App shell** — dalawang tab (Polymarket | Kalshi), bawat panel may sariling
+  START/STOP, sub-navigation (Dashboard/Settings/Logs/Trades/Statistics/About),
+  balance card, colored logs, at uptime counter; sabay na tumatakbo nang
+  independent
+- **Polymarket panel** — buong port ng PolyTradePro: live BTC chart
+  (line + candles), "Price to beat" 12PM-ET strike, mean reversion strategy,
+  death-trap filters, paper + live modes, position resume; dala pa rin ang
+  dating credentials sa Windows Credential Manager
+- **Kalshi panel (PAPER mode)** — market scanner (nakahanap ng READY na 50/50
+  games sa unang totoong takbo), straddle placement (verified: 101 pairs @ 49¢
+  sa MLB game), Hedge Sentinel state machine, settlement tracking, paper
+  balance accounting
+- **Kalshi API (bagong format)** — na-adapt sa 2026 API: dollar-string fields
+  (`yes_bid_dollars`, `volume_fp`) at `orderbook_fp` (`yes_dollars`/
+  `no_dollars` levels); backwards-compatible pa rin sa lumang integer-cents
+  format
+- **Tests** — 132 passed (ported poly suite + bagong Kalshi tests: straddle
+  math, hedge sentinel, RSA-PSS signing, paper fills, DB scoping, DoH)
+- **DoH resolver** — sakop na ang `polymarket.com`, `kalshi.com`, `kalshi.co`
+- **Environment** — venv sa Python 3.13 (HUWAG ang 3.10.0 — may CPython bug),
+  assets/icons kopyado mula sa reference project
+
+### 🔜 Susunod na hakbang
+1. **Kalshi LIVE mode validation** — nakasulat na ang code (RSA-PSS auth,
+   authed endpoints, live executor) pero hindi pa na-te-test sa totoong
+   account. Plano: Demo environment muna (practice money), tapos Production
+   na maliit na risk ($5–10)
+2. **PyInstaller packaging** — handa na ang `SportsBetPro.spec`; hindi pa
+   nabu-build ang `SportsBetPro.exe`
+3. **Paper-mode tuning** — hayaang tumakbo ng ilang araw; obserbahan ang
+   hedge sentinel timeout (90s) at entry band (48–52¢) kung kailangang
+   i-adjust sa Settings
+
+### 📝 Mga natutunan sa unang takbo (2026-07-22)
+- Ang auto-discovery ng sports series ay inuuna na ang major leagues
+  (`KXMLBGAME`, `KXWNBAGAME`, …) — ang alphabetical na una ay puro
+  off-season na soccer leagues
+- MLB game-day markets: malaki ang volume (100K–500K contracts); ang mga
+  2+ araw pa bago maglaro ay manipis (~300) — ang default na 5,000 minimum
+  volume ay makatwiran sa game day pero ibaba sa Settings kung nagte-test
+- Nahuli (at naayos) ng tests ang isang tunay na PnL bug: ang hedge-completed
+  na straddle ay dating naitatala bilang LOCKED (49¢+49¢) imbes na HEDGED
+  (49¢+51¢)
+
+---
+
 | Panel | Strategy | Markets | Currency |
 |---|---|---|---|
 | **Polymarket** | Mean Reversion ("Rubber Band") | Daily/4h/1h/15m BTC Up/Down | USDC (Polygon) |
