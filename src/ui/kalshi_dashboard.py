@@ -14,6 +14,7 @@ import qtawesome as qta
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -35,8 +36,10 @@ GRID_COLS = 2  # ilang game card kada row
 
 DEFAULT_PAPER_START = 1000.0
 
+# Visual hierarchy: routine INFO ay muted (iwas wall-of-color);
+# TRADE/WARN/ERROR lang ang pumupansin
 LEVEL_COLORS = {
-    "INFO": theme.ACCENT,
+    "INFO": theme.MUTED,
     "TRADE": theme.ACCENT,
     "WARN": theme.AMBER,
     "ERROR": theme.RED,
@@ -101,12 +104,17 @@ class KalshiDashboard(QWidget):
         self._strategy_label.setProperty("muted", True)
         self._strategy_label.setWordWrap(True)
 
+        divider = QFrame()
+        divider.setFrameShape(QFrame.Shape.HLine)
+        divider.setStyleSheet(f"color: {theme.BORDER_SOFT};")
+
         featured = Card()
         fc = QVBoxLayout(featured)
-        fc.setContentsMargins(16, 14, 16, 14)
-        fc.setSpacing(10)
+        fc.setContentsMargins(18, 15, 18, 15)
+        fc.setSpacing(11)
         fc.addLayout(head)
         fc.addLayout(outcomes)
+        fc.addWidget(divider)
         fc.addWidget(self.chart, stretch=1)
         fc.addWidget(self._strategy_label)
 
@@ -151,6 +159,7 @@ class KalshiDashboard(QWidget):
 
         self._log_list = QListWidget()
         self._log_list.setWordWrap(True)
+        self._log_list.setSpacing(3)  # hangin sa pagitan (readability)
 
         logs_panel = Card()
         logs_panel.setFixedWidth(RIGHT_COL_WIDTH)

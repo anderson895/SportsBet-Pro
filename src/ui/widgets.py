@@ -17,9 +17,18 @@ def panel_accent_qss(accent: str, accent_dim: str) -> str:
     QListWidget#sidebar::item:selected {{
         background: {accent_dim}; color: {accent};
     }}
+    QPushButton[navItem="true"][active="true"] {{
+        color: {theme.TEXT}; border-bottom: 2px solid {accent};
+    }}
     QPushButton#accentBtn {{ background: {accent}; color: #04160f; }}
     QPushButton#accentBtn:hover {{ background: {accent}; }}
+    QPushButton#startBtn {{ background: {accent}; border: 1px solid {accent};
+        color: #04160f; }}
+    QPushButton#startBtn:hover {{ background: {accent}; }}
+    QPushButton#startBtn:disabled {{ background: {accent_dim};
+        color: {theme.FAINT}; border-color: {accent_dim}; }}
     QLabel[pill="ok"] {{ background: {accent_dim}; color: {accent}; }}
+    QLabel[pill="outline"] {{ color: {accent}; border: 1px solid {accent}; }}
     """
 
 

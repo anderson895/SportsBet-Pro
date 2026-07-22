@@ -100,20 +100,28 @@ class BottomBar(QFrame):
         up_col.addWidget(self.uptime_label)
 
         row = QHBoxLayout(self)
-        row.setContentsMargins(16, 10, 16, 10)
+        row.setContentsMargins(18, 10, 18, 10)
         row.addLayout(strat_col)
-        row.addSpacing(24)
+        row.addWidget(self._vdivider())
         row.addLayout(market_col)
-        row.addSpacing(24)
+        row.addWidget(self._vdivider())
         row.addLayout(info_col)
-        row.addSpacing(24)
+        row.addWidget(self._vdivider())
         row.addLayout(risk_col)
         row.addStretch()
         row.addWidget(self.start_btn)
-        row.addSpacing(8)
+        row.addSpacing(10)
         row.addWidget(self.stop_btn)
         row.addStretch()
         row.addLayout(up_col)
+
+    def _vdivider(self) -> QFrame:
+        """Manipis na vertical separator para sa visual grouping."""
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.VLine)
+        line.setFixedHeight(30)
+        line.setStyleSheet(f"color: {theme.BORDER}; margin: 0 20px;")
+        return line
 
     def set_info_column(self, title: str, value: str) -> None:
         self._info_title.setText(title)
@@ -165,26 +173,15 @@ class ExchangePanel(QWidget):
         self.trades = TradesPage(db, currency)
         self.stats = StatsPage(db, currency)
 
-        # ---- sub-navigation (kaliwa, icon list tulad ng reference sidebar)
-        self._nav = QListWidget()
-        self._nav.setObjectName("sidebar")
-        self._nav.setIconSize(QSize(18, 18))
-        self._nav.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        for icon_name, label in self.PAGES:
-            icon = qta.icon(icon_name, color=theme.MUTED, color_selected="#c7d2fe")
-            item = QListWidgetItem(icon, label)
-            item.setToolTip(label)
-            self._nav.addItem(item)
-        self._nav.setCurrentRow(0)
-        self._nav.setFixedWidth(170)
-
+        # Ang page nav (Dashboard/Settings/...) ay SHARED na sa main window
+        # (nasa taas kasama ang brand) — hawak lang ng panel ang stack nito
         self._stack = QStackedWidget()
         for page in (
             self.dash, self.settings, self.logs, self.trades, self.stats,
             AboutPage(about_title, about_body),
         ):
             self._stack.addWidget(page)
-        self._nav.currentRowChanged.connect(self._stack.setCurrentIndex)
+        self._stack.setCurrentIndex(0)
 
         # ---- alert banner + bottom bar
         self.alert = AlertBanner()
@@ -192,17 +189,13 @@ class ExchangePanel(QWidget):
         self.bottom.start_btn.clicked.connect(self._on_start)
         self.bottom.stop_btn.clicked.connect(self._on_stop)
 
-        # ---- layout
-        content = QVBoxLayout()
-        content.setContentsMargins(6, 0, 0, 0)
-        content.addWidget(self.alert)
-        content.addWidget(self._stack, stretch=1)
-        content.addWidget(self.bottom)
-
-        root = QHBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.addWidget(self._nav)
-        root.addLayout(content, stretch=1)
+        # ---- layout (content -> bottom bar)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(8, 4, 4, 4)
+        root.setSpacing(8)
+        root.addWidget(self.alert)
+        root.addWidget(self._stack, stretch=1)
+        root.addWidget(self.bottom)
 
         # ---- uptime timer
         self._uptime_secs = 0
@@ -222,6 +215,10 @@ class ExchangePanel(QWidget):
         self.refresh_config_labels()
 
     # ------------------------------------------------------------------ slots
+
+    def set_page(self, index: int) -> None:
+        """Itakda ang aktibong page (tinatawag ng shared nav sa main window)."""
+        self._stack.setCurrentIndex(index)
 
     def _on_start(self) -> None:
         self._engine.start()

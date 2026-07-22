@@ -8,7 +8,7 @@ tumakbo nang sabay sa iisang qasync event loop.
 from __future__ import annotations
 
 import qtawesome as qta
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -153,16 +153,39 @@ class MainWindow(QMainWindow):
         version = QLabel(f"v{APP_VERSION}")
         version.setProperty("muted", True)
 
+        # ---- Shared page nav (Dashboard/Settings/...) — nakasentro sa taas,
+        #      kapantay ng brand; kontrolado ang page ng dalawang panel
+        self._page_btns: list[QPushButton] = []
+        page_nav = QHBoxLayout()
+        page_nav.setSpacing(2)
+        for i, (icon_name, label) in enumerate(ExchangePanel.PAGES):
+            b = QPushButton(f"  {label}")
+            b.setProperty("navItem", True)
+            b.setIcon(qta.icon(icon_name, color=theme.MUTED))
+            b.setIconSize(QSize(15, 15))
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.clicked.connect(lambda _c=False, idx=i: self._select_page(idx))
+            self._page_btns.append(b)
+            page_nav.addWidget(b)
+
+        # Row 1: brand (left) + page nav (center) + version (right)
         top = QHBoxLayout()
         top.setContentsMargins(16, 8, 16, 0)
         top.setSpacing(10)
         top.addWidget(brand_icon)
         top.addWidget(brand)
-        top.addSpacing(24)
-        top.addWidget(self._tab_poly)
-        top.addWidget(self._tab_kalshi)
+        top.addStretch()
+        top.addLayout(page_nav)
         top.addStretch()
         top.addWidget(version)
+
+        # Row 2: exchange tabs (Polymarket / Kalshi) — LEFT side
+        tabs_row = QHBoxLayout()
+        tabs_row.setContentsMargins(16, 0, 16, 0)
+        tabs_row.setSpacing(4)
+        tabs_row.addWidget(self._tab_poly)
+        tabs_row.addWidget(self._tab_kalshi)
+        tabs_row.addStretch()
 
         # ---- Panel stack -------------------------------------------------
         self._stack = QStackedWidget()
@@ -172,6 +195,7 @@ class MainWindow(QMainWindow):
         root = QVBoxLayout()
         root.setContentsMargins(0, 0, 8, 8)
         root.addLayout(top)
+        root.addLayout(tabs_row)
         root.addWidget(self._stack, stretch=1)
 
         container = QWidget()
@@ -181,10 +205,43 @@ class MainWindow(QMainWindow):
         # Pointer cursor + wheel blocking sa lahat ng inputs (tulad ng dati)
         self._apply_pointer_cursors(container)
 
-        # I-restore ang huling aktibong tab
+        # I-restore ang huling aktibong tab + default page
+        self._active_page = 0
+        self._current_accent = theme.POLY_ACCENT  # itatakda ng _switch
         start_tab = 1 if str(db.get_setting("active_exchange", "polymarket")) == "kalshi" else 0
         self._switch(start_tab)
+        self._select_page(0)
         self._refresh_poly_labels()
+
+    @staticmethod
+    def _exchange_accent(index: int) -> str:
+        return theme.KALSHI_ACCENT if index == 1 else theme.POLY_ACCENT
+
+    def _select_page(self, index: int) -> None:
+        """Shared page nav — parehong panel ay lumilipat sa parehong page."""
+        self._active_page = index
+        self.poly_panel.set_page(index)
+        self.kalshi_panel.set_page(index)
+        self._highlight_page()
+
+    def _highlight_page(self) -> None:
+        """I-highlight ang aktibong page gamit ang accent ng KASALUKUYANG
+        exchange (indigo sa Polymarket, mint sa Kalshi)."""
+        for i, b in enumerate(self._page_btns):
+            active = i == self._active_page
+            b.setProperty("active", active)
+            # Per-exchange underline color sa aktibong button
+            b.setStyleSheet(
+                f'QPushButton[navItem="true"][active="true"] {{ '
+                f'border-bottom: 2px solid {self._current_accent}; '
+                f'color: {theme.TEXT}; }}'
+            )
+            icon_name = ExchangePanel.PAGES[i][0]
+            b.setIcon(qta.icon(
+                icon_name,
+                color=(self._current_accent if active else theme.MUTED)))
+            b.style().unpolish(b)
+            b.style().polish(b)
 
     # ------------------------------------------------------------------ tabs
 
@@ -195,6 +252,9 @@ class MainWindow(QMainWindow):
             btn.style().unpolish(btn)
             btn.style().polish(btn)
         self._db.set_setting("active_exchange", "kalshi" if index == 1 else "polymarket")
+        # I-tint ang page nav ayon sa aktibong exchange
+        self._current_accent = self._exchange_accent(index)
+        self._highlight_page()
 
     def _refresh_poly_labels(self) -> None:
         """Timeframe column sa poly bottom bar — mula sa saved settings."""

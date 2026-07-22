@@ -27,8 +27,10 @@ from src.ui.widgets import Card, StatCard, StatusCard
 
 DEFAULT_PAPER_START = 1000.0
 
+# Visual hierarchy: routine INFO ay muted (iwas wall-of-color);
+# TRADE/WARN/ERROR lang ang pumupansin
 LEVEL_COLORS = {
-    "INFO": theme.GREEN,
+    "INFO": theme.MUTED,
     "TRADE": theme.ACCENT,
     "WARN": theme.AMBER,
     "ERROR": theme.RED,
@@ -146,6 +148,7 @@ class PolyDashboard(QWidget):
         # mas maraming log entries ang kita kaysa sa dating 150px strip
         self._log_list = QListWidget()
         self._log_list.setWordWrap(True)
+        self._log_list.setSpacing(3)  # hangin sa pagitan (readability)
 
         logs_panel = Card()
         logs_panel.setFixedWidth(340)

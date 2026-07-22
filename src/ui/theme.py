@@ -47,15 +47,15 @@ STYLESHEET = f"""
 QMainWindow, QWidget {{
     background: {BG};
     color: {TEXT};
-    font-family: 'Segoe UI';
+    font-family: 'Segoe UI Variable Display', 'Segoe UI Variable', 'Segoe UI';
     font-size: 13px;
 }}
 QLabel {{ background: transparent; border: none; }}
 QLabel[muted="true"] {{ color: {MUTED}; }}
-QLabel[h1="true"] {{ font-size: 27px; font-weight: 800; letter-spacing: -0.5px; }}
-QLabel[h2="true"] {{ font-size: 16px; font-weight: 700; }}
-QLabel[accent="true"] {{ color: {ACCENT}; font-weight: 700; font-size: 14px;
-    letter-spacing: 0.3px; }}
+QLabel[h1="true"] {{ font-size: 29px; font-weight: 800; letter-spacing: -0.8px; }}
+QLabel[h2="true"] {{ font-size: 17px; font-weight: 800; letter-spacing: -0.3px; }}
+QLabel[accent="true"] {{ color: {ACCENT}; font-weight: 800; font-size: 14px;
+    letter-spacing: 0.2px; }}
 
 QFrame[card="true"] {{
     background: {CARD};
@@ -118,6 +118,23 @@ QPushButton[exchangeTab="true"]:hover {{ color: {TEXT}; }}
 QPushButton[exchangeTab="true"][active="true"] {{
     color: {TEXT};
     border-bottom: 3px solid {ACCENT};
+}}
+
+/* ---- Per-panel top nav (Dashboard / Settings / Logs / …) ---- */
+QPushButton[navItem="true"] {{
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    padding: 9px 15px;
+    color: {MUTED};
+    font-size: 14px;
+    font-weight: 600;
+}}
+QPushButton[navItem="true"]:hover {{ color: {TEXT}; background: transparent; }}
+QPushButton[navItem="true"][active="true"] {{
+    color: {TEXT};
+    border-bottom: 2px solid {ACCENT};
 }}
 
 QPushButton {{
