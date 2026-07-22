@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QPushButton,
@@ -55,7 +56,8 @@ class KalshiDashboard(QWidget):
         self._db = db
         self._live_mode = False
         self._chart_ticker: str | None = None
-        self._games: list[dict] = []      # naka-group na scanned games
+        self._all_games: list[dict] = []  # lahat ng scanned games (pre-search)
+        self._games: list[dict] = []      # filtered (by search) na ipinapakita
         self._featured_idx = 0            # aling game ang naka-feature sa chart
         self._user_selected = False       # pinili ba ng user (huwag i-override)
 
@@ -144,9 +146,21 @@ class KalshiDashboard(QWidget):
         fc.addWidget(self.chart, stretch=1)
         fc.addWidget(self._strategy_label)
 
-        # ---- Scanned markets — Kalshi-style game cards grid -------------
-        table_title = QLabel("Live Sports Markets (50/50 candidates)")
+        # ---- Scanned markets — Kalshi-style game cards grid + search ----
+        table_title = QLabel("Live Sports Markets")
         table_title.setProperty("accent", True)
+        self._search = QLineEdit()
+        self._search.setPlaceholderText("Search team or matchup…")
+        self._search.setClearButtonEnabled(True)
+        self._search.setFixedWidth(260)
+        self._search.textChanged.connect(self._apply_search)
+        self._count_lbl = QLabel("")
+        self._count_lbl.setProperty("muted", True)
+        markets_head = QHBoxLayout()
+        markets_head.addWidget(table_title)
+        markets_head.addWidget(self._count_lbl)
+        markets_head.addStretch()
+        markets_head.addWidget(self._search)
 
         self._grid_host = QWidget()
         self._grid = QGridLayout(self._grid_host)
@@ -168,7 +182,7 @@ class KalshiDashboard(QWidget):
         markets_panel.setMinimumHeight(280)
         markets_col = QVBoxLayout(markets_panel)
         markets_col.setContentsMargins(16, 12, 16, 12)
-        markets_col.addWidget(table_title)
+        markets_col.addLayout(markets_head)
         markets_col.addWidget(mkt_scroll, stretch=1)
 
         # ---- Recent logs panel ------------------------------------------
@@ -248,6 +262,33 @@ class KalshiDashboard(QWidget):
         return f"{100.0 / pct:.2f}x"
 
     def update_markets(self, rows: list) -> None:
+        games = group_games(rows)
+        # READY muna, tapos by volume — para nasa taas ang tradeable
+        games.sort(key=lambda g: (not g["ready"], -g["vol"]))
+        self._all_games = [g for g in games if len(g["teams"]) >= 2]
+        self._has_scanned = bool(rows)
+        self._apply_search()
+
+    DISPLAY_CAP = 60  # ilang card ang irerender (search ay sa LAHAT pa rin)
+
+    def _apply_search(self) -> None:
+        """I-filter ang games ayon sa search text, tapos i-render.
+        Sinasala sa LAHAT ng scanned games, pero cap ang irerender para
+        hindi bumagal."""
+        q = self._search.text().strip().lower()
+        if q:
+            matches = [
+                g for g in self._all_games
+                if q in g["matchup"].lower()
+                or any(q in t[0].lower() for t in g.get("teams", []))
+            ]
+        else:
+            matches = list(self._all_games)
+        self._match_count = len(matches)
+        self._games = matches[:self.DISPLAY_CAP]
+        self._render_grid()
+
+    def _render_grid(self) -> None:
         # Linisin ang grid
         while self._grid.count():
             item = self._grid.takeAt(0)
@@ -255,17 +296,24 @@ class KalshiDashboard(QWidget):
             if w is not None:
                 w.deleteLater()
 
-        games = group_games(rows)
-        # READY muna, tapos by volume — para nasa taas ang tradeable
-        games.sort(key=lambda g: (not g["ready"], -g["vol"]))
-        games = [g for g in games if len(g["teams"]) >= 2][:12]
-        self._games = games
+        games = self._games
+        total = getattr(self, "_match_count", len(games))
+        if not games:
+            self._count_lbl.setText("")
+        elif total > len(games):
+            self._count_lbl.setText(f"({len(games)} of {total} — refine search)")
+        else:
+            self._count_lbl.setText(f"({total} shown)")
 
         if not games:
             self._counter_lbl.setText("—")
-            hint = QLabel("Scanning… no 50/50 candidate games yet."
-                          if rows else
-                          "Press START BOT to scan live sports markets…")
+            if self._search.text().strip():
+                msg = "No match for your search."
+            elif getattr(self, "_has_scanned", False):
+                msg = "Scanning… no candidate games yet."
+            else:
+                msg = "Press START BOT to scan live sports markets…"
+            hint = QLabel(msg)
             hint.setProperty("muted", True)
             self._grid.addWidget(hint, 0, 0)
             return
@@ -278,9 +326,8 @@ class KalshiDashboard(QWidget):
         # Panatilihin ang piniling market ng user kung nandiyan pa; kung hindi
         # (o auto-mode), i-feature ang unang game (READY na 50/50)
         if self._user_selected:
-            cur = self._chart_ticker
             idx = next((i for i, g in enumerate(games)
-                        if g["ticker"] == cur), None)
+                        if g["ticker"] == self._chart_ticker), None)
             if idx is None:
                 self._user_selected = False
                 self._featured_idx = 0

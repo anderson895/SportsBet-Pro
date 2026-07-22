@@ -349,7 +349,8 @@ class KalshiEngine(QObject):
 
         for ticker in series[:14]:
             try:
-                data = await self._client.get_markets(series_ticker=ticker)
+                data = await self._client.get_markets(
+                    series_ticker=ticker, limit=200)
             except Exception as e:
                 self.log("WARN", f"Market scan failed for {ticker}: {e}")
                 continue
@@ -369,7 +370,9 @@ class KalshiEngine(QObject):
                     found.append(cand)
 
         rows.sort(key=lambda r: -r["volume"])
-        self.marketsScanned.emit(rows[:50])
+        # Ipasa ang MARAMI (hindi lang 50) — may search na sa UI para
+        # mahanap ang kahit anong game/team
+        self.marketsScanned.emit(rows[:400])
 
         # I-focus ang chart (kapag walang aktibong straddle). Kung may pinili
         # ang user (carousel/click), respetuhin iyon basta nandiyan pa ang
