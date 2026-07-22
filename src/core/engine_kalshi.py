@@ -94,7 +94,33 @@ class KalshiEngine(QObject):
         self._traded_tickers: set[str] = set()  # iwasang i-straddle ulit
         # Chart: focused market (ticker, title) na pino-poll kada ilang segundo
         self._chart_focus: Optional[tuple[str, str]] = None
+        self._chart_focus_user = False  # pinili ba ng user (huwag i-auto-override)
         self._chart_task: Optional[asyncio.Task] = None
+
+    def set_chart_focus(self, ticker: str, title: str) -> None:
+        """Tawagin ng UI kapag pinili ng user ang isang market sa chart
+        (carousel o click). Hindi ito i-o-override ng auto-scanner, at
+        agad kumukuha ng unang presyo para hindi maghintay ng 3-5s."""
+        self._chart_focus = (ticker, title)
+        self._chart_focus_user = True
+        try:
+            asyncio.create_task(self._chart_poll_once(ticker, title))
+        except RuntimeError:
+            pass  # walang running loop (hal. sa tests)
+
+    async def _chart_poll_once(self, ticker: str, title: str) -> None:
+        """Isang mabilis na poll ng napiling market — instant na tick."""
+        if self._client is None:
+            return
+        try:
+            book = await self._client.get_orderbook(ticker)
+            p = best_prices_from_orderbook(book)
+            if p.get("yes_bid") and p.get("yes_ask"):
+                ymid = (p["yes_bid"] + p["yes_ask"]) / 2.0
+                nmid = (p["no_bid"] + p["no_ask"]) / 2.0
+                self.marketTick.emit(ticker, title, ymid, nmid)
+        except Exception as e:
+            filelog.debug("Immediate chart poll failed: %s", e)
 
     # ------------------------------------------------------------------ API
 
@@ -127,7 +153,7 @@ class KalshiEngine(QObject):
                 raise
             except Exception as e:
                 filelog.debug("Chart poll error: %s", e)
-            await asyncio.sleep(5)
+            await asyncio.sleep(3)
 
     def start(self) -> None:
         if self.state is BotState.RUNNING:
@@ -263,21 +289,25 @@ class KalshiEngine(QObject):
                              "set Series Tickers manually in Settings")
             return
         tickers = [s.get("ticker", "") for s in series if s.get("ticker")]
-        # Unahin ang major leagues na malamang may aktibong games (ang
-        # alphabetical na unang anim ay puro off-season na soccer league)
+        # Unahin ang major leagues (baseball/basketball/football/hockey/
+        # soccer) — pero kumuha ng MARAMING sports series para hindi puro
+        # isang sport lang ang lumalabas
         preferred_order = (
             "KXMLBGAME", "KXWNBAGAME", "KXNBAGAME", "KXNFLGAME",
-            "KXNHLGAME", "KXNCAAFGAME", "KXEPLGAME", "KXUCLGAME",
+            "KXNHLGAME", "KXNCAAFGAME", "KXNCAABGAME",
+            "KXEPLGAME", "KXUCLGAME", "KXLALIGAGAME", "KXSERIEAGAME",
+            "KXBUNDESGAME", "KXLIGUE1GAME", "KXMLSGAME", "KXLIGAMXGAME",
+            "KXUFCGAME", "KXATPGAME", "KXWTAGAME",
         )
         game_series = [t for t in tickers if "GAME" in t.upper()]
         preferred = [t for t in preferred_order if t in tickers]
         rest = [t for t in game_series if t not in preferred]
-        chosen = (preferred + rest)[:6] or tickers[:6]
+        chosen = (preferred + rest)[:14] or tickers[:14]
         if chosen:
             self._db.set_setting("series_tickers", ",".join(chosen))
-            self.log("INFO", f"Discovered sports series: {', '.join(chosen)} "
-                             f"(all available: {len(tickers)}) — editable in "
-                             "Settings")
+            self.log("INFO", f"Discovered {len(chosen)} sports series: "
+                             f"{', '.join(chosen)} (all available: "
+                             f"{len(tickers)}) — editable in Settings")
 
     # ------------------------------------------------------------------ scan
 
@@ -317,7 +347,7 @@ class KalshiEngine(QObject):
         found: list[MarketCandidate] = []
         rows: list[dict] = []
 
-        for ticker in series[:6]:
+        for ticker in series[:14]:
             try:
                 data = await self._client.get_markets(series_ticker=ticker)
             except Exception as e:
@@ -341,14 +371,23 @@ class KalshiEngine(QObject):
         rows.sort(key=lambda r: -r["volume"])
         self.marketsScanned.emit(rows[:50])
 
-        # I-focus ang chart sa pinaka-liquid na market (kapag walang aktibong
-        # straddle) — ang _chart_loop ang mabilis na magpo-poll nito kada 5s
+        # I-focus ang chart (kapag walang aktibong straddle). Kung may pinili
+        # ang user (carousel/click), respetuhin iyon basta nandiyan pa ang
+        # market. Kung auto: UNAHIN ang READY na 50/50 (gumagalaw sa ~50%);
+        # ang top-volume ay madalas tapos nang laban (flat sa ~100%).
         if rows and self._cycle is None:
-            top = rows[0]
-            self._chart_focus = (top["ticker"], top["title"])
-            ymid = (top["yes_bid"] + top["yes_ask"]) / 2.0
-            nmid = (top["no_bid"] + top["no_ask"]) / 2.0
-            self.marketTick.emit(top["ticker"], top["title"], ymid, nmid)
+            if (self._chart_focus_user and self._chart_focus is not None
+                    and not any(r["ticker"] == self._chart_focus[0]
+                                for r in rows)):
+                self._chart_focus_user = False  # nawala na — bumalik sa auto
+            if not self._chart_focus_user:
+                ready = [r for r in rows if r.get("status") == "READY"]
+                focus = ready[0] if ready else rows[0]
+                self._chart_focus = (focus["ticker"], focus["title"])
+                ymid = (focus["yes_bid"] + focus["yes_ask"]) / 2.0
+                nmid = (focus["no_bid"] + focus["no_ask"]) / 2.0
+                self.marketTick.emit(focus["ticker"], focus["title"],
+                                     ymid, nmid)
 
         # place=False: ipinakita na ang cards/chart, pero hindi maglalagay
         # ng bago. Iba-iba ang dahilan — piliin ang tamang status text.

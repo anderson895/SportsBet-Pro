@@ -56,24 +56,145 @@ Both can run at the same time.
 
 ---
 
-## The Two Strategies
+# 📖 Strategy Documentation
 
-### Polymarket — Mean Reversion (ported from PolyTradePro)
-Binance provides the read-only BTC feed. When BTC stretches 1.5%–2.5% from the
-period open inside the 4–12h entry window, the bot buys the out-of-the-money
-side at 15¢–25¢ and sells at the profit target — with volume-escalation,
-Coinbase-premium, and Economic-Data-Day death-trap filters.
+This bot implements two independent, well-defined strategies — one per panel.
+Both are mechanical (rule-based), fully unit-tested as pure functions, and run
+in Paper mode by default.
 
-### Kalshi — Internal Straddle / Box Arbitrage
-On a high-liquidity ~50/50 sports market, it places two **post-only resting
-limit buys**: YES @ 49¢ **and** NO @ 49¢. Because the market is binary, one
-side is guaranteed to settle at $1.00 → **~+1.1% per completed cycle** after
-maker fees.
+---
 
-**Hedge Sentinel:** if only one side fills within the timeout (default 90s) or
-the price runs away, it cancels the lagging order and takes the other side up
-to 51¢ to lock a "scratch" (~breakeven) — the bot is never left holding a
-directional sports bet.
+## Strategy 1 — Polymarket: Mean Reversion ("Rubber Band")
+
+Ported from the PolyTradePro project. It trades Polymarket's **daily BTC
+Up/Down** markets (and 4h/1h/15m variants).
+
+### The idea
+Think of BTC's price as a rubber band anchored to the daily open (the "Price
+to Beat"). The further price stretches from that anchor without fundamental
+news, the higher the statistical probability it snaps back before the day
+ends — over 90% of daily candles have wicks on **both** ends. When retail
+panics into the winning side, the losing side's shares get cheap (15¢–25¢),
+which is where the edge lives.
+
+### Data feed
+- **Binance** WebSocket — read-only BTCUSDT price + 1m klines (no API key
+  needed for public market data)
+- **Coinbase** spot — for the premium death-trap filter
+- The daily market's strike is anchored to the **12:00 PM ET** settlement
+  (not 00:00 UTC), matching Polymarket's real settlement rule (DST-aware)
+
+### Entry rules
+1. Wait for the **4–12h window** after the period open (skip the opening
+   volatility)
+2. Look for a **1.5%–2.5% stretch** from the open
+   (>2.5% = possible momentum-expansion day → skip)
+3. The out-of-the-money share must be priced **15¢–25¢**
+4. Buy the mean-reversion side (DOWN if pumped, UP if dumped)
+5. **One trade per market period**
+
+### Exit rules
+- **Take profit:** +100% of entry price (e.g., 20¢ → 40¢) — you're trading the
+  probability shift, not holding to settlement
+- **Stop loss:** −50% of entry
+- **End-of-period force exit** before settlement — never hold to the close
+
+### Death-trap filters (when to NOT trade)
+Mean reversion fails on momentum-expansion days. Three guards veto entries:
+1. **Volume escalation** — if recent hourly volume ≥ 2× the baseline,
+   institutions are stepping in (the rubber band is breaking, not stretching)
+2. **Coinbase premium** — if the US-exchange (Coinbase) price is running
+   significantly above/below Binance in the trade's direction, aggressive spot
+   flow is present → do not fade it
+3. **Economic Data Day** — a manual toggle to block entries on Fed/CPI days
+   (structural trend days, not mean-reversion days)
+
+### Timeframe scaling
+Daily-calibrated parameters auto-scale to 4h/1h/15m markets: time windows scale
+by period fraction; stretch thresholds scale by √(time) (e.g., the 1.5% daily
+entry stretch becomes ~0.31% on 1-hour markets).
+
+---
+
+## Strategy 2 — Kalshi: Internal Straddle / Box Arbitrage
+
+From the reference research (`reference/High-Yield Kalshi Trading Strategies`).
+This is a **delta-neutral, market-neutral** strategy — the bot does **not**
+care who wins the game.
+
+### The idea
+Kalshi is a binary exchange: every market settles to exactly **$1.00** for the
+winning side and **$0.00** for the losing side. On a high-liquidity **~50/50**
+sports market, if you buy **both** YES and NO for a combined price below $1.00,
+you are guaranteed a profit at settlement regardless of the outcome.
+
+### Execution
+The bot places two **post-only resting limit BUY** orders on the same market:
+
+```
+BUY YES @ 49¢   +   BUY NO @ 49¢     →   pair cost = 98¢
+one side settles at $1.00            →   payout    = 100¢
+```
+
+- **`post_only` is essential** — it forces maker orders. If they would cross
+  immediately (become taker), Kalshi rejects them. Taker fees would make the
+  strategy unprofitable.
+- Contract count = `floor(risk_usd / 0.98)`
+
+### The fee math
+Kalshi's fee per order (rounded **up** to the next cent):
+
+```
+fee = ceil( 0.0175 · C · P · (1 − P) )        [C = contracts, P = price in $]
+
+Per leg @ 49¢:   0.0175 · 0.49 · 0.51 ≈ $0.0044/contract
+Round-trip pair: ≈ $0.0088
+Net profit/pair: 100¢ − 98¢ − 0.88¢ ≈ +1.13¢   →  ~+1.15% per completed cycle
+```
+
+During Kalshi's 0% maker-fee promotional windows, the edge rises to ~+2%.
+
+### The Hedge Sentinel (single-sided-fill protection)
+The one real risk is **execution risk** — one leg fills (say YES @ 49¢) but the
+market moves before the NO leg fills, leaving a directional bet. A pure state
+machine (`strategy/straddle.py`) guards against this:
+
+```
+RESTING_BOTH → ONE_FILLED(t0) → LOCKED                    (both filled — arb locked)
+                              ↘ HEDGING → HEDGED           (scratch locked ≈ breakeven)
+                                       ↘ UNHEDGED_HOLD     (hedge failed — held to settlement)
+             → CANCELLED                                   (no fills — market drifted)
+```
+
+The Sentinel fires when a single side has been filled for longer than the
+**timeout** (default 90s) **or** the unfilled side's ask runs above the
+**hedge cap** (default 51¢). It then cancels the lagging resting order and
+places an aggressive crossing BUY (taker) on the missing side up to 51¢:
+
+- **Hedge fills** → `HEDGED`: pair cost ≤ 49¢ + 51¢ = 100¢ for a 100¢ payout →
+  loss ≈ fees only (a "scratch")
+- **Hedge can't fill** after N retries → `UNHEDGED_HOLD`: the bot holds the
+  single side to settlement (worst case −49¢/contract) and records the final
+  PnL when the game resolves
+
+### Risk profile
+- **Structural risk: ~0%** — you own both sides of a binary market
+- **Real-world risk: ~1–2% max** — bounded by the Hedge Sentinel's scratch cost
+  or a rare unhedged hold. This is the ~2% figure from the reference backtest.
+
+### Market selection
+The scanner discovers live sports **series** (baseball, basketball, football,
+hockey, soccer, and more — up to 14) and filters for markets where both YES and
+NO mids sit inside the **48–52¢ band**, with sufficient **volume** and a sane
+**time-to-close** window (avoids late-game markets that move violently).
+Genuine 49/49 markets are rare, so the scanner may sit idle — that is by design,
+not a bug.
+
+> **Reference backtest (from the PDF):** starting $2,000, box arbitrage on the
+> sports genre, ~15 turnovers/month at +1.14%/cycle compounded to ~$15,975 over
+> 12 months (+698.8%) in the 100%-compounding model. Real results depend on
+> fill quality and available 50/50 liquidity; this bot's Paper mode lets you
+> observe the actual fill rate before risking capital.
 
 ---
 

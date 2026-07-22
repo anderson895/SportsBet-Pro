@@ -11,7 +11,7 @@ from __future__ import annotations
 import datetime as dt
 
 import qtawesome as qta
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QFrame,
@@ -47,11 +47,17 @@ LEVEL_COLORS = {
 
 
 class KalshiDashboard(QWidget):
+    # Hiling na i-focus ng chart ang isang partikular na market (ticker, title)
+    focusRequested = Signal(str, str)
+
     def __init__(self, db: ScopedDatabase) -> None:
         super().__init__()
         self._db = db
         self._live_mode = False
         self._chart_ticker: str | None = None
+        self._games: list[dict] = []      # naka-group na scanned games
+        self._featured_idx = 0            # aling game ang naka-feature sa chart
+        self._user_selected = False       # pinili ba ng user (huwag i-override)
 
         # ---- Status cards row -------------------------------------------
         self.cards = {
@@ -79,10 +85,30 @@ class KalshiDashboard(QWidget):
         self._market_title.setProperty("h2", True)
         self._straddle_pill = Pill("IDLE", "muted")
 
+        # Carousel: ‹  N of M  › — cycle sa mga featured market (kalshi-style)
+        self._prev_btn = QPushButton()
+        self._prev_btn.setIcon(qta.icon("fa6s.chevron-left", color=theme.TEXT))
+        self._next_btn = QPushButton()
+        self._next_btn.setIcon(qta.icon("fa6s.chevron-right", color=theme.TEXT))
+        for b in (self._prev_btn, self._next_btn):
+            b.setFixedSize(30, 28)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._counter_lbl = QLabel("—")
+        self._counter_lbl.setStyleSheet(
+            f"color: {theme.MUTED}; font-size: 12px; font-weight: 700")
+        self._counter_lbl.setMinimumWidth(56)
+        self._counter_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._prev_btn.clicked.connect(lambda: self._step_featured(-1))
+        self._next_btn.clicked.connect(lambda: self._step_featured(1))
+
         head = QHBoxLayout()
         head.setSpacing(10)
         head.addWidget(self._live_pill)
         head.addWidget(self._market_title, stretch=1)
+        head.addWidget(self._prev_btn)
+        head.addWidget(self._counter_lbl)
+        head.addWidget(self._next_btn)
+        head.addSpacing(6)
         head.addWidget(self._straddle_pill)
 
         # Outcome percentages (YES mint, NO rose) — parang kalshi.com
@@ -191,13 +217,35 @@ class KalshiDashboard(QWidget):
 
     def update_market_tick(self, ticker: str, title: str,
                            yes_pct: float, no_pct: float) -> None:
+        # I-plot LANG kung ito ang naka-feature na market (iwas mag-halo kapag
+        # nag-navigate/nag-click ang user ng ibang market)
+        featured = self._featured_ticker()
+        if featured is not None and ticker != featured:
+            return
         if ticker != self._chart_ticker:
             self._chart_ticker = ticker
             self._market_title.setText(title or ticker)
             self.chart.reset()
         self.chart.add_tick(yes_pct, no_pct)
-        self._yes_lbl.setText(f"YES {yes_pct:.0f}%")
-        self._no_lbl.setText(f"NO {no_pct:.0f}%")
+        # Team names + payout odds (kalshi-style) kung kilala ang game;
+        # else fallback sa generic YES/NO
+        game = next((g for g in self._games if g["ticker"] == ticker), None)
+        if game and len(game.get("teams", [])) >= 2:
+            t0, t1 = game["teams"][0][0], game["teams"][1][0]
+            self._yes_lbl.setText(f"{t0}  {yes_pct:.0f}%  ·  "
+                                  f"{self._payout(yes_pct)}")
+            self._no_lbl.setText(f"{t1}  {no_pct:.0f}%  ·  "
+                                 f"{self._payout(no_pct)}")
+        else:
+            self._yes_lbl.setText(f"YES {yes_pct:.0f}%")
+            self._no_lbl.setText(f"NO {no_pct:.0f}%")
+
+    @staticmethod
+    def _payout(pct: float) -> str:
+        """Payout multiplier kung mananalo (kalshi 'Pays out' column)."""
+        if pct <= 0:
+            return "—"
+        return f"{100.0 / pct:.2f}x"
 
     def update_markets(self, rows: list) -> None:
         # Linisin ang grid
@@ -211,8 +259,10 @@ class KalshiDashboard(QWidget):
         # READY muna, tapos by volume — para nasa taas ang tradeable
         games.sort(key=lambda g: (not g["ready"], -g["vol"]))
         games = [g for g in games if len(g["teams"]) >= 2][:12]
+        self._games = games
 
         if not games:
+            self._counter_lbl.setText("—")
             hint = QLabel("Scanning… no 50/50 candidate games yet."
                           if rows else
                           "Press START BOT to scan live sports markets…")
@@ -221,8 +271,55 @@ class KalshiDashboard(QWidget):
             return
 
         for i, game in enumerate(games):
-            self._grid.addWidget(GameCard(game), i // GRID_COLS,
-                                 i % GRID_COLS)
+            card = GameCard(game)
+            card.clicked.connect(self._on_card_clicked)
+            self._grid.addWidget(card, i // GRID_COLS, i % GRID_COLS)
+
+        # Panatilihin ang piniling market ng user kung nandiyan pa; kung hindi
+        # (o auto-mode), i-feature ang unang game (READY na 50/50)
+        if self._user_selected:
+            cur = self._chart_ticker
+            idx = next((i for i, g in enumerate(games)
+                        if g["ticker"] == cur), None)
+            if idx is None:
+                self._user_selected = False
+                self._featured_idx = 0
+            else:
+                self._featured_idx = idx
+        else:
+            self._featured_idx = 0
+        self._counter_lbl.setText(f"{self._featured_idx + 1} of {len(games)}")
+
+    # ---- featured market carousel / focus -----------------------------
+
+    def _featured_ticker(self) -> str | None:
+        if 0 <= self._featured_idx < len(self._games):
+            return self._games[self._featured_idx]["ticker"]
+        return None
+
+    def _on_card_clicked(self, game: dict) -> None:
+        idx = next((i for i, g in enumerate(self._games)
+                    if g["ticker"] == game["ticker"]), None)
+        if idx is not None:
+            self._select_featured(idx)
+
+    def _step_featured(self, delta: int) -> None:
+        if not self._games:
+            return
+        self._select_featured((self._featured_idx + delta) % len(self._games))
+
+    def _select_featured(self, idx: int) -> None:
+        if not (0 <= idx < len(self._games)):
+            return
+        self._featured_idx = idx
+        self._user_selected = True
+        g = self._games[idx]
+        self._counter_lbl.setText(f"{idx + 1} of {len(self._games)}")
+        self.chart.reset()
+        self._chart_ticker = g["ticker"]
+        self._market_title.setText(g.get("title", g["matchup"]))
+        # Ipa-poll sa engine ang piniling market para gumalaw ang chart
+        self.focusRequested.emit(g["ticker"], g.get("title", g["matchup"]))
 
     def set_straddle_status(self, text: str) -> None:
         # I-derive ang pill level mula sa state keyword. IMPORTANTE:

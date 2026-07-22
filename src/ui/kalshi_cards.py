@@ -8,6 +8,7 @@ ticker (ticker na walang huling segment)."""
 from __future__ import annotations
 
 import qtawesome as qta
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout
 
 from src.ui import theme
@@ -59,7 +60,10 @@ def group_games(rows: list[dict]) -> list[dict]:
         g = games.get(ev)
         if g is None:
             icon, league = _sport(str(row.get("ticker", "")))
+            # `ticker` = representative market (unang team side) na pino-poll
+            # ng chart; `title` = titulo nito para sa featured header
             g = {"matchup": matchup, "league": league, "icon": icon,
+                 "ticker": str(row.get("ticker", "")), "title": title,
                  "vol": 0, "ready": False, "teams": []}
             games[ev] = g
             order.append(ev)
@@ -71,10 +75,15 @@ def group_games(rows: list[dict]) -> list[dict]:
 
 
 class GameCard(Card):
-    """Isang matchup card — kagaya ng kalshi.com game tiles."""
+    """Isang matchup card — kagaya ng kalshi.com game tiles. Clickable:
+    kapag pinindot, iea-emit ang game dict para i-feature sa chart."""
+
+    clicked = Signal(dict)
 
     def __init__(self, game: dict) -> None:
         super().__init__()
+        self._game = game
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         col = QVBoxLayout(self)
         col.setContentsMargins(16, 14, 16, 14)
         col.setSpacing(10)
@@ -119,7 +128,17 @@ class GameCard(Card):
             row.addWidget(pill)
             col.addLayout(row)
 
-        # Footer: volume
+        # Footer: volume + "view details" hint
+        foot = QHBoxLayout()
         vol = QLabel(f"${game['vol']:,} vol")
         vol.setStyleSheet(f"color: {theme.MUTED}; font-size: 12px")
-        col.addWidget(vol)
+        hint = QLabel("View details ›")
+        hint.setStyleSheet(f"color: {theme.FAINT}; font-size: 11px")
+        foot.addWidget(vol)
+        foot.addStretch()
+        foot.addWidget(hint)
+        col.addLayout(foot)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        self.clicked.emit(self._game)
+        super().mousePressEvent(event)

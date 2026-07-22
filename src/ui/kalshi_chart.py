@@ -24,10 +24,13 @@ MAX_POINTS = 5000
 
 class KalshiChart(pg.PlotWidget):
     def __init__(self) -> None:
+        # Antialiasing = makinis (hindi jagged/laggy tignan) ang mga linya
+        pg.setConfigOptions(antialias=True)
         super().__init__(axisItems={"bottom": pg.DateAxisItem()})
+        self.setAntialiasing(True)
         self.setBackground(theme.CARD)
         self.setMinimumHeight(230)
-        self.showGrid(x=True, y=True, alpha=0.10)
+        self.showGrid(x=True, y=True, alpha=0.08)
         self.setMouseEnabled(x=True, y=False)
         self.hideAxis("left")
         self.showAxis("right")
@@ -45,14 +48,19 @@ class KalshiChart(pg.PlotWidget):
         # 50% reference line — dito nakaangkla ang box-arbitrage entry
         mid_line = pg.InfiniteLine(
             pos=50, angle=0,
-            pen=pg.mkPen("#3a4655", width=1, style=Qt.PenStyle.DashLine),
+            pen=pg.mkPen("#39485a", width=1, style=Qt.PenStyle.DashLine),
         )
         self.addItem(mid_line, ignoreBounds=True)
 
-        yes_fill = QColor(theme.ACCENT)
-        yes_fill.setAlpha(26)
-        self._yes_curve = self.plot(pen=pg.mkPen(theme.ACCENT, width=2))
-        self._no_curve = self.plot(pen=pg.mkPen(theme.RED, width=2))
+        # Makinis (antialiased) na linya — cosmetic pen para pantay ang lapad
+        # at hindi jagged/choppy tignan. Walang fill para hindi masira ang
+        # auto-zoom ng Y-axis.
+        yes_pen = pg.mkPen(theme.ACCENT, width=2)
+        yes_pen.setCosmetic(True)
+        no_pen = pg.mkPen(theme.RED, width=2)
+        no_pen.setCosmetic(True)
+        self._yes_curve = self.plot(pen=yes_pen)
+        self._no_curve = self.plot(pen=no_pen)
 
         self._yes_badge = self._make_badge(theme.ACCENT)
         self._no_badge = self._make_badge(theme.RED)
@@ -101,5 +109,12 @@ class KalshiChart(pg.PlotWidget):
         self._no_badge.label.setFormat(f"{no_pct:.0f}%")
         self._no_badge.show()
 
-        start = now - self._window_secs if len(ts) > 1 else now - 60
-        self.setXRange(max(start, ts[0]), now, padding=0.02)
+        # Auto-follow window; laging may minimum na lapad (45s) para hindi
+        # mag-collapse ang x-axis kapag 1-2 points pa lang (nagpapakita ng
+        # garbage tick labels kung zero-width ang range)
+        left = now - self._window_secs
+        if ts[0] > left:
+            left = ts[0]
+        if now - left < 45:
+            left = now - 45
+        self.setXRange(left, now, padding=0.02)

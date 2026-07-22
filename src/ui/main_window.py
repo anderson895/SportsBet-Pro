@@ -114,6 +114,7 @@ class MainWindow(QMainWindow):
         # ---- Kalshi-specific wiring -------------------------------------
         kalshi_engine.marketsScanned.connect(kalshi_dash.update_markets)
         kalshi_engine.marketTick.connect(kalshi_dash.update_market_tick)
+        kalshi_dash.focusRequested.connect(kalshi_engine.set_chart_focus)
         kalshi_engine.strategyStatus.connect(kalshi_dash.set_strategy_status)
         kalshi_engine.straddleStatus.connect(kalshi_dash.set_straddle_status)
         kalshi_engine.liveBalance.connect(kalshi_dash.set_live_balance)
