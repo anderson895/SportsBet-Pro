@@ -11,14 +11,49 @@ Both can run at the same time.
 
 ---
 
-## 📌 Progress / Status (2026-07-22)
+## 🆕 What's New in v1.1.0
 
-### Development Phases
+The Kalshi panel was reworked into a **Kalshi.com-style market view**:
+
+- **Live game cards** — markets grouped by matchup, showing team names,
+  sport icon "logos", win %, and volume (green-outlined pills like kalshi.com);
+  scrollable grid, up to 60 rendered
+- **Featured market carousel** — page through candidates with `‹ N of M ›`,
+  **or click any card** to focus its live probability chart. Your selection is
+  respected (the auto-scanner won't override it)
+- **Search** — a search box filters live sports markets by **team or matchup**
+  across the *entire* scanned set (not just what's on screen); shows
+  `(60 of N — refine search)` when results exceed the display cap
+- **Team odds + payout** in the featured header — e.g.
+  `Washington 44% · 2.27x   Colorado 56% · 1.79x`
+- **More sports** — auto-discovers up to **14 sports series** (baseball,
+  basketball, WNBA/NCAAB, football, hockey, and soccer: EPL / UCL / La Liga /
+  Serie A / Ligue 1 / MLS / Liga MX) instead of just baseball
+- **Smoother chart** — antialiased two-line probability chart with a minimum
+  window width (no more collapsed axis on a fresh selection) and an instant
+  first data point on focus/navigation (polls every 3s)
+- **Always-on market feed** — cards + chart are live even while **STOPPED**
+  (START/STOP only gates trading)
+- **Full strategy documentation** added to this README (see below)
+
+> **Scope note:** the Kalshi panel intentionally shows only tradeable **binary
+> 50/50 sports games**. Multi-outcome prediction markets (e.g. "LeBron's Next
+> Team", elections) are not shown — the box-arbitrage strategy only applies to
+> two-outcome games.
+
+Releases: **[v1.1.0](https://github.com/anderson895/SportsBet-Pro/releases/tag/v1.1.0)**
+· [v1.0.0](https://github.com/anderson895/SportsBet-Pro/releases/tag/v1.0.0)
+
+---
+
+## 📌 Progress / Status
+
+### Development Phases — all complete ✅
 - [x] **Phase 1: Skeleton** — verbatim reuse, `ScopedDatabase`, dual-panel UI shell, stub engines
 - [x] **Phase 2: Polymarket port** — feed / strategy / execution, `PolyEngine`, dashboard + settings, ported tests
 - [x] **Phase 3: Kalshi paper** — client, straddle math + state machine, `KalshiEngine`, Kalshi UI, tests
 - [x] **Phase 4: Kalshi live** — RSA-PSS auth **validated against the real Kalshi production API** (credential check returns balance)
-- [ ] **Phase 5: Packaging** — PyInstaller build of `SportsBetPro.exe` *(spec/icon/README ready; build pending)*
+- [x] **Phase 5: Packaging** — PyInstaller build shipped as `SportsBetPro.exe` (see Releases)
 
 ### ✅ Done & verified working
 - **App shell** — top exchange switcher (Polymarket / Kalshi), a shared top page
