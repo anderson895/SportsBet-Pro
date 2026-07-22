@@ -1,108 +1,91 @@
 # SportsBet Pro — Dual-Panel Trading Bot (Polymarket + Kalshi)
 
-Isang Windows desktop trading bot na may DALAWANG independent na panel:
-
----
-
-## 📌 Progress / Status (as of 2026-07-22)
-
-### Development Phases
-- [x] **Phase 1: Skeleton** — copy verbatim files, ScopedDatabase, dual-panel UI shell, stub engines
-- [x] **Phase 2: Polymarket port** — feed/strategy/execution, PolyEngine, poly dashboard + settings, port tests
-- [x] **Phase 3: Kalshi paper** — client, straddle math/state machine, KalshiEngine, kalshi UI, tests
-- [ ] **Phase 4: Kalshi live** — RSA-PSS auth, authed endpoints, live executor, demo-env validation
-      *(nakasulat na ang code; ang demo/prod validation na lang ang kulang)*
-- [ ] **Phase 5: Packaging** — PyInstaller build ng SportsBetPro.exe
-      *(handa na ang spec/icon/README; ang build na lang ang kulang)*
-
-### ✅ Tapos at VERIFIED na gumagana
-- **App shell** — dalawang tab (Polymarket | Kalshi), bawat panel may sariling
-  START/STOP, sub-navigation (Dashboard/Settings/Logs/Trades/Statistics/About),
-  balance card, colored logs, at uptime counter; sabay na tumatakbo nang
-  independent
-- **Polymarket panel** — buong port ng PolyTradePro: live BTC chart
-  (line + candles), "Price to beat" 12PM-ET strike, mean reversion strategy,
-  death-trap filters, paper + live modes, position resume; dala pa rin ang
-  dating credentials sa Windows Credential Manager
-- **Kalshi panel (PAPER mode)** — market scanner (nakahanap ng READY na 50/50
-  games sa unang totoong takbo), straddle placement (verified: 101 pairs @ 49¢
-  sa MLB game), Hedge Sentinel state machine, settlement tracking, paper
-  balance accounting
-- **Kalshi API (bagong format)** — na-adapt sa 2026 API: dollar-string fields
-  (`yes_bid_dollars`, `volume_fp`) at `orderbook_fp` (`yes_dollars`/
-  `no_dollars` levels); backwards-compatible pa rin sa lumang integer-cents
-  format
-- **Tests** — 132 passed (ported poly suite + bagong Kalshi tests: straddle
-  math, hedge sentinel, RSA-PSS signing, paper fills, DB scoping, DoH)
-- **DoH resolver** — sakop na ang `polymarket.com`, `kalshi.com`, `kalshi.co`
-- **Environment** — venv sa Python 3.13 (HUWAG ang 3.10.0 — may CPython bug),
-  assets/icons kopyado mula sa reference project
-
-### 🔜 Susunod na hakbang
-1. **Kalshi LIVE mode validation** — nakasulat na ang code (RSA-PSS auth,
-   authed endpoints, live executor) pero hindi pa na-te-test sa totoong
-   account. Plano: Demo environment muna (practice money), tapos Production
-   na maliit na risk ($5–10)
-2. **PyInstaller packaging** — handa na ang `SportsBetPro.spec`; hindi pa
-   nabu-build ang `SportsBetPro.exe`
-3. **Paper-mode tuning** — hayaang tumakbo ng ilang araw; obserbahan ang
-   hedge sentinel timeout (90s) at entry band (48–52¢) kung kailangang
-   i-adjust sa Settings
-
-### 📝 Mga natutunan sa unang takbo (2026-07-22)
-- Ang auto-discovery ng sports series ay inuuna na ang major leagues
-  (`KXMLBGAME`, `KXWNBAGAME`, …) — ang alphabetical na una ay puro
-  off-season na soccer leagues
-- MLB game-day markets: malaki ang volume (100K–500K contracts); ang mga
-  2+ araw pa bago maglaro ay manipis (~300) — ang default na 5,000 minimum
-  volume ay makatwiran sa game day pero ibaba sa Settings kung nagte-test
-- Nahuli (at naayos) ng tests ang isang tunay na PnL bug: ang hedge-completed
-  na straddle ay dating naitatala bilang LOCKED (49¢+49¢) imbes na HEDGED
-  (49¢+51¢)
-
----
+A Windows desktop trading bot with **two independent panels**, each with its
+own ON/OFF (START/STOP) button, settings, balance, trades, statistics, and logs.
+Both can run at the same time.
 
 | Panel | Strategy | Markets | Currency |
 |---|---|---|---|
-| **Polymarket** | Mean Reversion ("Rubber Band") | Daily/4h/1h/15m BTC Up/Down | USDC (Polygon) |
+| **Polymarket** | Mean Reversion ("Rubber Band") | Daily / 4h / 1h / 15m BTC Up/Down | USDC (Polygon) |
 | **Kalshi** | Internal Straddle / Box Arbitrage | 50/50 sports moneylines (NBA/NFL/MLB…) | USD |
 
-Bawat panel ay may **sariling ON/OFF (START/STOP) button**, settings (risk,
-Paper/Live mode, API keys), balance card, trades table, statistics, at logs.
-Parehong pwedeng tumakbo nang sabay.
+---
+
+## 📌 Progress / Status (2026-07-22)
+
+### Development Phases
+- [x] **Phase 1: Skeleton** — verbatim reuse, `ScopedDatabase`, dual-panel UI shell, stub engines
+- [x] **Phase 2: Polymarket port** — feed / strategy / execution, `PolyEngine`, dashboard + settings, ported tests
+- [x] **Phase 3: Kalshi paper** — client, straddle math + state machine, `KalshiEngine`, Kalshi UI, tests
+- [x] **Phase 4: Kalshi live** — RSA-PSS auth **validated against the real Kalshi production API** (credential check returns balance)
+- [ ] **Phase 5: Packaging** — PyInstaller build of `SportsBetPro.exe` *(spec/icon/README ready; build pending)*
+
+### ✅ Done & verified working
+- **App shell** — top exchange switcher (Polymarket / Kalshi), a shared top page
+  nav (Dashboard / Settings / Logs / Trades / Statistics / About), per-panel
+  START/STOP + uptime, per-exchange accent theme (indigo for Polymarket, mint
+  for Kalshi); both bots run independently and concurrently
+- **Polymarket panel** — full PolyTradePro port: live BTC chart (line + candles),
+  "Price to beat" 12PM-ET strike, mean reversion strategy, death-trap filters,
+  paper + live modes, position resume; existing Windows Credential Manager
+  credentials carry over
+- **Kalshi panel** — always-on market feed (live game cards + probability chart
+  even while STOPPED), scanner that groups markets into Kalshi.com-style game
+  cards, straddle placement (verified: 101 pairs @ 49¢ on a live MLB game),
+  Hedge Sentinel state machine (observed firing on a real 50/50 market),
+  settlement tracking, paper balance accounting
+- **Kalshi live auth** — RSA-PSS SHA256 request signing validated against the
+  real production server; PEM auto-saved to `data/kalshi_key.pem` when it
+  exceeds the Windows Credential Manager blob size limit
+- **Kalshi 2026 API** — adapted to dollar-string fields (`yes_bid_dollars`,
+  `volume_fp`) and `orderbook_fp` (`yes_dollars` / `no_dollars` levels);
+  still backwards-compatible with the older integer-cents format
+- **Tests** — 132 passing (ported Polymarket suite + Kalshi tests: straddle
+  math, hedge sentinel, RSA-PSS signing, paper fills, DB scoping, DoH)
+- **DoH resolver** — covers `polymarket.com`, `kalshi.com`, `kalshi.co`
+
+### 🔜 Next steps
+1. **Kalshi live order path** — auth is validated but the production account has
+   a $0.00 balance, so orders can't fill yet. To exercise the full live order
+   path, either fund the account (small risk) or create a **demo** account
+   (demo.kalshi.co, practice money) and set Environment → Demo in Settings.
+2. **PyInstaller packaging** — `SportsBetPro.spec` is ready; the `.exe` is not
+   built yet.
+3. **Paper-mode tuning** — let it run for a while and observe the hedge-sentinel
+   timeout (90s) and entry band (48–52¢); adjust in Settings if needed.
 
 ---
 
-## Ang Dalawang Strategy
+## The Two Strategies
 
-### Polymarket — Mean Reversion (port ng PolyTradePro)
-Binance ang read-only BTC feed; kapag naka-stretch ang BTC ng 1.5%–2.5% mula
-sa period open sa loob ng 4–12h entry window, bumibili ng out-of-the-money
-side sa 15¢–25¢ at nagbebenta sa profit target — kasama ang volume-escalation,
-Coinbase-premium, at Economic-Data-Day na death-trap filters.
+### Polymarket — Mean Reversion (ported from PolyTradePro)
+Binance provides the read-only BTC feed. When BTC stretches 1.5%–2.5% from the
+period open inside the 4–12h entry window, the bot buys the out-of-the-money
+side at 15¢–25¢ and sells at the profit target — with volume-escalation,
+Coinbase-premium, and Economic-Data-Day death-trap filters.
 
 ### Kalshi — Internal Straddle / Box Arbitrage
-Sa high-liquidity ~50/50 sports market, naglalagay ng dalawang **post-only
-resting limit buy**: YES @ 49¢ **at** NO @ 49¢. Dahil binary ang market, isang
-side ang siguradong magse-settle sa $1.00 → **~+1.1% guaranteed per cycle**
-pagkatapos ng maker fees.
+On a high-liquidity ~50/50 sports market, it places two **post-only resting
+limit buys**: YES @ 49¢ **and** NO @ 49¢. Because the market is binary, one
+side is guaranteed to settle at $1.00 → **~+1.1% per completed cycle** after
+maker fees.
 
-**Hedge Sentinel:** kapag isang side lang ang na-fill sa loob ng timeout
-(default 90s) o tumakbo ang presyo, kinakansela ang lagging order at kinukuha
-ang kabilang side hanggang 51¢ para ma-lock ang "scratch" (~breakeven) —
-hindi naiiwang may directional sports bet ang bot.
+**Hedge Sentinel:** if only one side fills within the timeout (default 90s) or
+the price runs away, it cancels the lagging order and takes the other side up
+to 51¢ to lock a "scratch" (~breakeven) — the bot is never left holding a
+directional sports bet.
 
 ---
 
-## Pag-run mula source
+## Running from source
 
 ```powershell
-python -m venv venv          # Python 3.13
+python -m venv venv          # Python 3.13 (NOT 3.10.0 — CPython bug bpo-45757)
 .\venv\Scripts\python.exe -m pip install -r requirements.txt
-.\venv\Scripts\python.exe -m src.main    # o i-double-click ang run.bat
+.\venv\Scripts\python.exe -m src.main    # or double-click run.bat
 ```
 
-Requirements: Windows 10/11, internet connection.
+Requirements: Windows 10/11, an internet connection.
 
 ## Tests
 
@@ -110,39 +93,41 @@ Requirements: Windows 10/11, internet connection.
 .\venv\Scripts\python.exe -m pytest tests -v
 ```
 
-| Test file | Saklaw |
+| Test file | Coverage |
 |---|---|
-| `test_mean_reversion.py`, `test_timeframes.py`, `test_filters.py`, `test_polymarket.py`, `test_paper_e2e.py`, `test_resume.py` | Buong Polymarket side (ported, proven suite) |
+| `test_mean_reversion.py`, `test_timeframes.py`, `test_filters.py`, `test_polymarket.py`, `test_paper_e2e.py`, `test_resume.py` | Full Polymarket side (ported, proven suite) |
 | `test_straddle_math.py` | Kalshi fees (ceil per order), pair PnL @49/49, scratch @49+51, sizing, candidate filter |
-| `test_hedge_sentinel.py` | StraddleCycle state machine — lahat ng transitions kasama ang sentinel triggers at restart persistence |
-| `test_kalshi_auth.py` | RSA-PSS SHA256 signing (in-test keypair, verified sa public key) |
-| `test_kalshi_paper.py` | Simulated fills mula sa canned orderbook snapshots |
-| `test_db_scoping.py` | Isolation ng dalawang exchange sa iisang bot.db |
+| `test_hedge_sentinel.py` | `StraddleCycle` state machine — all transitions incl. sentinel triggers and restart persistence |
+| `test_kalshi_auth.py` | RSA-PSS SHA256 signing (in-test keypair, verified with the public key) |
+| `test_kalshi_paper.py` | Simulated fills from canned orderbook snapshots |
+| `test_db_scoping.py` | Isolation of the two exchanges in a single `bot.db` |
 | `test_netdns.py` | DoH resolver (polymarket.com + kalshi.com override) |
 
-## Setup ng Live Mode
+## Live Mode Setup
 
-### Polymarket (kaparehong-pareho ng dating PolyTradePro)
+### Polymarket (identical to PolyTradePro)
 Settings → Trading Mode: Live → Private Key + Funder Address + Wallet Type →
-Save. Awtomatikong vine-verify ang credentials at ipinapakita ang balance.
-Ang mga dating creds sa Windows Credential Manager ay dala-dala pa rin
-(parehong service name).
+Save. Credentials are verified automatically and the balance is shown. Existing
+credentials in Windows Credential Manager carry over (same service name).
 
 ### Kalshi
-1. kalshi.com → Account Settings → **API Keys** → gumawa ng key. Makukuha mo
-   ang **API Key ID** at ang **RSA private key (.pem)** file.
+1. kalshi.com (or demo.kalshi.co) → Account Settings → **API Keys** → create a
+   key. You get an **API Key ID** and an **RSA private key (.pem)** file.
 2. Kalshi panel → Settings → Trading Mode: **Live**
-3. I-paste ang API Key ID; i-paste ang buong PEM text **o** ilagay ang file
-   path ng .pem
-4. (Optional) Environment: **Demo** muna (demo.kalshi.co, practice money)
-   bago mag-Production
-5. Save Settings → awtomatikong vine-verify via `GET /portfolio/balance`
-6. START BOT — mag-a-auto-discover ito ng sports series tickers sa unang
-   takbo (editable sa Settings)
+3. Paste the API Key ID; paste the full PEM text **or** enter the .pem file path.
+4. Environment: use **Demo** (demo.kalshi.co, practice money) before Production.
+5. Save Settings → credentials are verified via `GET /portfolio/balance`.
+6. START BOT — it auto-discovers sports series tickers on first run (editable
+   in Settings).
 
-> **Paper mode muna.** Ang Kalshi paper mode ay gumagamit ng TOTOONG public
-> market data na may simulated fills — buong scanner + sentinel ang
-> na-e-exercise nang walang pera.
+> **Paper mode first.** Kalshi paper mode uses **real public market data** with
+> simulated fills, so the full scanner + Hedge Sentinel are exercised with no
+> real money.
+
+> **Note on secrets:** the API Key ID is stored in Windows Credential Manager.
+> A large RSA key that exceeds its size limit is written to
+> `data\kalshi_key.pem` (gitignored) instead — this is the standard Kalshi
+> `.pem` approach.
 
 ## Building the Executable
 
@@ -150,24 +135,24 @@ Ang mga dating creds sa Windows Credential Manager ay dala-dala pa rin
 .\venv\Scripts\python.exe -m PyInstaller --noconfirm SportsBetPro.spec
 ```
 
-Output: `dist/SportsBetPro/`. Parehong build gotchas ng reference project:
-`--collect-submodules finplot` (nasa spec na), i-uninstall ang PyQt6 sa build
-venv, at huwag mag-build sa Python 3.10.0.
+Output: `dist/SportsBetPro/`. Same build gotchas as the reference project:
+`--collect-submodules finplot` (already in the spec), uninstall PyQt6 from the
+build venv, and do not build with Python 3.10.0.
 
 ## Troubleshooting
 
-| Problema | Solusyon |
+| Problem | Solution |
 |---|---|
-| Polymarket/Kalshi card Disconnected | May built-in DoH resolver (`src/core/netdns.py`) laban sa ISP DNS poisoning ng `*.polymarket.com` at `*.kalshi.com` |
-| Hindi bumubukas ang app | Patakbuhin sa terminal: `.\venv\Scripts\python.exe -m src.main` |
-| Runtime errors | Tingnan ang **`data\app.log`** — bawat error may full traceback |
-| Kalshi scanner walang nahahanap | Normal — bihira ang eksaktong 49/49 na market. Luwagan ang band o volume threshold sa Settings, o hintayin ang game nights |
-| `UNHEDGED_HOLD` alert | Nabigo ang hedge — hawak ang isang side hanggang settlement (max loss = entry cost). Titingnan ng bot ang settlement at ire-record ang PnL |
+| Polymarket/Kalshi card shows Disconnected | A built-in DoH resolver (`src/core/netdns.py`) bypasses ISP DNS poisoning of `*.polymarket.com` and `*.kalshi.com` |
+| App won't open | Run from a terminal to see the error: `.\venv\Scripts\python.exe -m src.main` |
+| Runtime errors | Check **`data\app.log`** — every error has a full traceback |
+| Kalshi scanner finds nothing | Normal — exact 49/49 markets are rare. Widen the band or lower the volume threshold in Settings, or wait for game nights |
+| `UNHEDGED_HOLD` alert | The hedge couldn't fill — one side is held to settlement (max loss = entry cost). The bot watches for settlement and records the PnL |
 
 ## Disclaimer
 
-Real-money trades ang ginagawa nito kapag Live mode. Gamitin ang Paper mode
-hanggang na-validate mo mismo ang strategy. May settlement/directional risk
-ang UNHEDGED_HOLD scenario; ang "guaranteed" na arb ay nakadepende sa
-matagumpay na double-sided fill. Responsibilidad mong i-verify na legal ang
-Polymarket/Kalshi sa iyong jurisdiction.
+This software places real-money trades when Live mode is enabled. Use Paper mode
+until you have validated the strategy yourself. The `UNHEDGED_HOLD` scenario
+carries settlement/directional risk, and the "guaranteed" arbitrage depends on a
+successful double-sided fill. Verifying that Polymarket/Kalshi are legal in your
+jurisdiction is your responsibility.

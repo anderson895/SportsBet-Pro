@@ -150,7 +150,7 @@ class KalshiSettingsPage(QWidget):
         self._pem_path = QLineEdit()
         self._pem_path.setText(str(g("pem_path", "")))
         self._pem_path.setPlaceholderText(
-            r"C:\path\to\kalshi-key.pem  (alternative sa paste)"
+            r"C:\path\to\kalshi-key.pem  (alternative to pasting)"
         )
         path_lab = add_field("…or RSA Private Key File Path", self._pem_path)
 
