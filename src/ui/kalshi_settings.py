@@ -248,9 +248,10 @@ class KalshiSettingsPage(QWidget):
         self._status.setWordWrap(True)
 
         note = QLabel(
-            "Secrets are stored in Windows Credential Manager, never in "
-            "files.\nEntry at 49¢ + 49¢ with a $1.00 settlement leaves "
-            "~+1.1% per completed cycle after maker fees."
+            "API Key ID is stored in Windows Credential Manager. Large RSA "
+            "keys that exceed its size limit are saved to "
+            "data\\kalshi_key.pem instead.\nEntry at 49¢ + 49¢ with a $1.00 "
+            "settlement leaves ~+1.1% per completed cycle after maker fees."
         )
         note.setProperty("muted", True)
         note.setWordWrap(True)
@@ -284,14 +285,31 @@ class KalshiSettingsPage(QWidget):
 
     def _save(self) -> None:
         if self._api_id.text().strip():
-            secrets.set_secret(secrets.KEY_KALSHI_API_ID,
-                               self._api_id.text().strip())
+            try:
+                secrets.set_secret(secrets.KEY_KALSHI_API_ID,
+                                   self._api_id.text().strip())
+            except Exception as e:
+                self._set_status(f"✗ Could not save API Key ID: {e}", theme.RED)
+                return
             self._api_id.clear()
+
+        self._db.set_setting("pem_path", self._pem_path.text().strip())
         pem = self._pem_paste.toPlainText().strip()
         if pem:
-            secrets.set_secret(secrets.KEY_KALSHI_PEM, pem)
+            try:
+                secrets.set_secret(secrets.KEY_KALSHI_PEM, pem)
+            except Exception:
+                # Ang RSA PEM ay madalas lumampas sa ~2.5KB blob limit ng
+                # Windows Credential Manager (WinError 1783). Fallback:
+                # isulat sa protektadong file sa data dir at gamitin ang path.
+                from src.core.paths import DATA_DIR
+                DATA_DIR.mkdir(parents=True, exist_ok=True)
+                key_file = DATA_DIR / "kalshi_key.pem"
+                key_file.write_text(pem, encoding="utf-8")
+                secrets.set_secret(secrets.KEY_KALSHI_PEM, "")  # linisin
+                self._db.set_setting("pem_path", str(key_file))
+                self._pem_path.setText(str(key_file))
             self._pem_paste.clear()
-        self._db.set_setting("pem_path", self._pem_path.text().strip())
 
         self._db.set_setting(
             "trading_mode", "live" if self._mode.currentIndex() == 1 else "paper"
