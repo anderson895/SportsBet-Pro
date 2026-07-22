@@ -1,11 +1,26 @@
-"""Reusable card widgets para sa dashboard."""
+"""Reusable card / badge widgets para sa dashboard."""
 from __future__ import annotations
 
 import qtawesome as qta
-from PySide6.QtCore import QEvent, QObject
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout
 
 from src.ui import theme
+
+
+def panel_accent_qss(accent: str, accent_dim: str) -> str:
+    """Stylesheet na ipinapatong sa isang exchange panel para ma-tint ang
+    accent nito (sidebar selection, accent headers, Save button, sub-nav)
+    nang hindi ginagalaw ang base palette."""
+    return f"""
+    QLabel[accent="true"] {{ color: {accent}; }}
+    QListWidget#sidebar::item:selected {{
+        background: {accent_dim}; color: {accent};
+    }}
+    QPushButton#accentBtn {{ background: {accent}; color: #04160f; }}
+    QPushButton#accentBtn:hover {{ background: {accent}; }}
+    QLabel[pill="ok"] {{ background: {accent_dim}; color: {accent}; }}
+    """
 
 
 class WheelBlocker(QObject):
@@ -23,6 +38,24 @@ class WheelBlocker(QObject):
         return super().eventFilter(obj, event)
 
 
+class Pill(QLabel):
+    """Maliit na colored badge para sa status (READY, RUNNING, atbp.)."""
+
+    def __init__(self, text: str = "", level: str = "muted") -> None:
+        super().__init__(text)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.set_level(level)
+
+    def set(self, text: str, level: str) -> None:
+        self.setText(text)
+        self.set_level(level)
+
+    def set_level(self, level: str) -> None:
+        self.setProperty("pill", level)
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+
 class Card(QFrame):
     def __init__(self) -> None:
         super().__init__()
@@ -30,18 +63,22 @@ class Card(QFrame):
 
 
 class StatusCard(Card):
-    """Connection card: icon + pangalan + Connected/Disconnected + dot."""
+    """Connection card: icon + pangalan + Connected/Disconnected + dot.
+
+    Habang "Checking…" (wala pang alam na estado), ang dot ay dahan-dahang
+    kumukurap (amber pulse); tumitigil kapag na-set na ang totoong estado.
+    """
 
     def __init__(self, icon: str, name: str, icon_color: str = theme.MUTED) -> None:
         super().__init__()
         self._icon = QLabel()
-        self._icon.setPixmap(qta.icon(icon, color=icon_color).pixmap(26, 26))
+        self._icon.setPixmap(qta.icon(icon, color=icon_color).pixmap(24, 24))
         self._name = QLabel(name)
-        self._name.setStyleSheet("font-weight: bold; font-size: 14px")
+        self._name.setStyleSheet("font-weight: 700; font-size: 14px")
         self._sub = QLabel("Checking…")
         self._sub.setProperty("muted", True)
         self._dot = QLabel("●")
-        self._dot.setStyleSheet(f"color: {theme.MUTED}; font-size: 15px")
+        self._dot.setStyleSheet(f"color: {theme.AMBER}; font-size: 16px")
 
         text_col = QVBoxLayout()
         text_col.setSpacing(2)
@@ -49,16 +86,30 @@ class StatusCard(Card):
         text_col.addWidget(self._sub)
 
         row = QHBoxLayout(self)
-        row.setContentsMargins(14, 12, 14, 12)
+        row.setContentsMargins(16, 13, 16, 13)
+        row.setSpacing(12)
         row.addWidget(self._icon)
         row.addLayout(text_col, stretch=1)
         row.addWidget(self._dot)
 
+        # Pulse timer para sa "Checking…" state
+        self._pulse_on = True
+        self._pulse = QTimer(self)
+        self._pulse.setInterval(600)
+        self._pulse.timeout.connect(self._tick_pulse)
+        self._pulse.start()
+
+    def _tick_pulse(self) -> None:
+        self._pulse_on = not self._pulse_on
+        color = theme.AMBER if self._pulse_on else theme.BORDER
+        self._dot.setStyleSheet(f"color: {color}; font-size: 16px")
+
     def set_state(self, up: bool) -> None:
+        self._pulse.stop()
         color = theme.GREEN if up else theme.RED
         self._sub.setText("Connected" if up else "Disconnected")
-        self._sub.setStyleSheet(f"color: {color}")
-        self._dot.setStyleSheet(f"color: {color}; font-size: 15px")
+        self._sub.setStyleSheet(f"color: {color}; font-weight: 600")
+        self._dot.setStyleSheet(f"color: {color}; font-size: 16px")
 
 
 class StatCard(Card):
@@ -66,16 +117,19 @@ class StatCard(Card):
 
     def __init__(self, title: str, value: str = "—", sub: str = "") -> None:
         super().__init__()
-        self._title = QLabel(title)
-        self._title.setProperty("muted", True)
+        self._title = QLabel(title.upper())
+        self._title.setStyleSheet(
+            f"color: {theme.FAINT}; font-weight: 700; font-size: 11px;"
+            " letter-spacing: 0.6px"
+        )
         self._value = QLabel(value)
-        self._value.setStyleSheet("font-size: 20px; font-weight: bold")
+        self._value.setStyleSheet("font-size: 21px; font-weight: 800")
         self._sub = QLabel(sub)
         self._sub.setProperty("muted", True)
 
         col = QVBoxLayout(self)
-        col.setContentsMargins(14, 12, 14, 12)
-        col.setSpacing(3)
+        col.setContentsMargins(16, 13, 16, 13)
+        col.setSpacing(4)
         col.addWidget(self._title)
         col.addWidget(self._value)
         if sub:
@@ -83,13 +137,13 @@ class StatCard(Card):
 
     def set_value(self, text: str, color: str | None = None) -> None:
         self._value.setText(text)
-        style = "font-size: 20px; font-weight: bold"
+        style = "font-size: 21px; font-weight: 800"
         if color:
             style += f"; color: {color}"
         self._value.setStyleSheet(style)
 
     def set_title(self, text: str) -> None:
-        self._title.setText(text)
+        self._title.setText(text.upper())
 
     def set_sub(self, text: str) -> None:
         self._sub.setText(text)

@@ -73,6 +73,7 @@ class KalshiEngine(QObject):
     strategyStatus = Signal(str)          # human-readable strategy state
     straddleStatus = Signal(str)          # active cycle state machine text
     marketsScanned = Signal(list)         # list[dict] para sa dashboard table
+    marketTick = Signal(str, str, float, float)  # (ticker, title, yes%, no%)
     tradeExecuted = Signal()              # may bagong trade sa DB
     logAdded = Signal(str, str)           # (level, message)
     modeChanged = Signal(str)             # "PAPER" | "LIVE"
@@ -85,24 +86,56 @@ class KalshiEngine(QObject):
         self.state = BotState.STOPPED
         self.executor: KalshiPaperExecutor | KalshiLiveExecutor = KalshiPaperExecutor()
         self._client: Optional[KalshiClient] = None
-        self._run_task: Optional[asyncio.Task] = None
+        self._loop_task: Optional[asyncio.Task] = None
         self._balance_task: Optional[asyncio.Task] = None
+        self._session_ready = False  # handa na ba ang executor (post-START)
         self._cycle: Optional[StraddleCycle] = None
+        self._cycle_title: str = ""  # matchup title ng aktibong straddle
         self._traded_tickers: set[str] = set()  # iwasang i-straddle ulit
+        # Chart: focused market (ticker, title) na pino-poll kada ilang segundo
+        self._chart_focus: Optional[tuple[str, str]] = None
+        self._chart_task: Optional[asyncio.Task] = None
 
     # ------------------------------------------------------------------ API
 
     def start_monitors(self) -> None:
-        """Walang laging-bukas na feed ang Kalshi panel (walang chart) —
-        ang shared ConnectionMonitor sa poly engine ang nagche-check ng
-        kalshi endpoint. Placeholder para pareho ang engine interface."""
+        """Buksan ang laging-bukas na market feed (tulad ng Binance chart ng
+        Polymarket): nagsa-scan at nagpapakita ng live game cards + chart
+        KAHIT STOPPED. Ang START/STOP ay para lang sa aktwal na trading."""
+        if self._loop_task is None or self._loop_task.done():
+            self._loop_task = asyncio.create_task(self._loop(), name="kalshi-loop")
+        if self._chart_task is None or self._chart_task.done():
+            self._chart_task = asyncio.create_task(
+                self._chart_loop(), name="kalshi-chart")
+
+    async def _chart_loop(self) -> None:
+        """Mabilis na chart feed — pino-poll ang focused market kada 5s para
+        mabilis mapuno ang linya (ang scan loop ay kada 30s, masyadong bagal
+        para sa chart). Ang focus ay itinatakda ng scanner/monitor."""
+        while True:
+            try:
+                foc = self._chart_focus
+                if foc is not None and self._client is not None:
+                    ticker, title = foc
+                    book = await self._client.get_orderbook(ticker)
+                    p = best_prices_from_orderbook(book)
+                    if p.get("yes_bid") and p.get("yes_ask"):
+                        ymid = (p["yes_bid"] + p["yes_ask"]) / 2.0
+                        nmid = (p["no_bid"] + p["no_ask"]) / 2.0
+                        self.marketTick.emit(ticker, title, ymid, nmid)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                filelog.debug("Chart poll error: %s", e)
+            await asyncio.sleep(5)
 
     def start(self) -> None:
         if self.state is BotState.RUNNING:
             return
         self.state = BotState.RUNNING
+        self._session_ready = False
         mode = str(self._db.get_setting("trading_mode", "paper")).lower()
-        self._run_task = asyncio.create_task(self._run(mode), name="kalshi-run")
+        asyncio.create_task(self._begin_session(mode), name="kalshi-session")
         self.stateChanged.emit(self.state.value)
         self.log("INFO", f"Bot STARTED [{mode.upper()} MODE] — Internal "
                          "Straddle (box arbitrage) on 50/50 sports markets")
@@ -111,24 +144,17 @@ class KalshiEngine(QObject):
         if self.state is BotState.STOPPED:
             return
         self.state = BotState.STOPPED
-        for task in (self._run_task, self._balance_task):
-            if task is not None:
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-        self._run_task = None
-        self._balance_task = None
-        if self._client is not None:
-            await self._client.aclose()
-            self._client = None
+        self._session_ready = False
+        # HINDI hinihinto ang _loop_task — buhay pa rin ang market feed
+        # (cards + chart) kahit STOPPED; ang trading lang ang huminto
+        if self._balance_task is not None:
+            self._balance_task.cancel()
+            self._balance_task = None
         self.stateChanged.emit(self.state.value)
-        self.strategyStatus.emit("idle (press START BOT)")
         self.straddleStatus.emit("—")
-        self.log("INFO", "Bot STOPPED — resting orders (if any) remain on "
-                         "the exchange in LIVE mode; cancel them on kalshi.com "
-                         "if you do not want them")
+        self.log("INFO", "Bot STOPPED — trading paused; live market feed "
+                         "stays on. LIVE resting orders (if any) remain on "
+                         "the exchange; cancel them on kalshi.com if unwanted")
 
     def log(self, level: str, message: str) -> None:
         self._db.add_log(level, message)
@@ -140,34 +166,61 @@ class KalshiEngine(QObject):
 
     # ------------------------------------------------------------- main loop
 
-    async def _run(self, mode: str) -> None:
+    async def _begin_session(self, mode: str) -> None:
+        """Ihanda ang executor kapag nag-START (paper/live). Kapag pumalya
+        ang LIVE, bumalik sa PAPER (tulad ng Polymarket)."""
         try:
             await self._setup(mode)
         except Exception as e:
-            filelog.exception("Kalshi setup failed:")
-            self.log("ERROR", f"Kalshi setup failed: {e} — bot stopped")
-            self.state = BotState.STOPPED
-            self.stateChanged.emit(self.state.value)
-            return
-
-        self._restore_cycle()
-
-        while self.state is BotState.RUNNING:
+            filelog.exception("Kalshi live setup failed:")
+            self.log("ERROR", f"Live setup failed: {e} — falling back to "
+                              "PAPER mode")
             try:
-                if self._cycle is None:
-                    await self._scan_and_place()
+                self.executor = KalshiPaperExecutor()
+                self.modeChanged.emit("PAPER")
+            except Exception as e2:
+                filelog.exception("Paper fallback also failed:")
+                self.log("ERROR", f"Paper fallback failed: {e2} — bot stopped")
+                self.state = BotState.STOPPED
+                self.stateChanged.emit(self.state.value)
+                return
+        self._restore_cycle()
+        self._session_ready = True
+
+    async def _loop(self) -> None:
+        """Laging-bukas: nagsa-scan ng market feed (cards + chart) kahit
+        STOPPED; nagta-trade lang kapag RUNNING at handa na ang session."""
+        # Public client para sa scanning — laging available
+        env = str(self._db.get_setting("env", "prod"))
+        if self._client is None:
+            try:
+                self._client = KalshiClient(env=env)
+                await self._ensure_series_tickers()
+            except Exception as e:
+                self.log("WARN", f"Kalshi market feed init failed: {e}")
+
+        while True:
+            try:
+                trading = self.state is BotState.RUNNING and self._session_ready
+                if trading and self._cycle is None:
+                    await self._scan_and_place(place=True)
                     await asyncio.sleep(self._scan_interval())
-                elif self._cycle.state is CycleState.UNHEDGED_HOLD:
+                elif trading and self._cycle.state is CycleState.UNHEDGED_HOLD:
+                    await self._scan_and_place(place=False)
                     await self._watch_settlement()
                     await asyncio.sleep(SETTLE_POLL_SECS)
-                else:
+                elif trading:
                     await self._monitor_cycle()
                     await asyncio.sleep(FILL_POLL_SECS)
+                else:
+                    # STOPPED o naghahanda pa: read-only market feed lang
+                    await self._scan_and_place(place=False)
+                    await asyncio.sleep(self._scan_interval())
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                filelog.exception("Kalshi engine loop error:")
-                self.log("WARN", f"Engine loop error: {e} — retrying in 10s")
+                filelog.exception("Kalshi loop error:")
+                self.log("WARN", f"Loop error: {e} — retrying in 10s")
                 await asyncio.sleep(10)
 
     async def _setup(self, mode: str) -> None:
@@ -255,7 +308,7 @@ class KalshiEngine(QObject):
         return float(self._db.get_setting("scan_interval_secs",
                                           SCAN_INTERVAL_SECS))
 
-    async def _scan_and_place(self) -> None:
+    async def _scan_and_place(self, place: bool = True) -> None:
         cfg = self._scan_config()
         series = [s.strip() for s in
                   str(self._db.get_setting("series_tickers", "")).split(",")
@@ -287,6 +340,32 @@ class KalshiEngine(QObject):
 
         rows.sort(key=lambda r: -r["volume"])
         self.marketsScanned.emit(rows[:50])
+
+        # I-focus ang chart sa pinaka-liquid na market (kapag walang aktibong
+        # straddle) — ang _chart_loop ang mabilis na magpo-poll nito kada 5s
+        if rows and self._cycle is None:
+            top = rows[0]
+            self._chart_focus = (top["ticker"], top["title"])
+            ymid = (top["yes_bid"] + top["yes_ask"]) / 2.0
+            nmid = (top["no_bid"] + top["no_ask"]) / 2.0
+            self.marketTick.emit(top["ticker"], top["title"], ymid, nmid)
+
+        # place=False: ipinakita na ang cards/chart, pero hindi maglalagay
+        # ng bago. Iba-iba ang dahilan — piliin ang tamang status text.
+        if not place:
+            if (self._cycle is not None
+                    and self._cycle.state is CycleState.UNHEDGED_HOLD):
+                self.strategyStatus.emit(
+                    "HOLDING unhedged position to settlement — new entries "
+                    f"paused ({len(rows)} live markets)")
+            elif self.state is BotState.RUNNING:
+                self.strategyStatus.emit(
+                    f"PREPARING session… ({len(rows)} live markets)")
+            else:
+                self.strategyStatus.emit(
+                    f"MONITORING {len(rows)} live markets — press START BOT "
+                    "to trade")
+            return
 
         ranked = rank_candidates(
             [c for c in found if c.ticker not in self._traded_tickers],
@@ -322,6 +401,7 @@ class KalshiEngine(QObject):
             ticker=target.ticker, count=count, entry_cents=entry,
             started_ts=now, cfg=self._sentinel_config(),
         )
+        self._cycle_title = target.title
         self._traded_tickers.add(target.ticker)
         self._persist_cycle()
         cost = count * entry * 2 / 100.0
@@ -352,6 +432,15 @@ class KalshiEngine(QObject):
         except Exception as e:
             filelog.warning("Orderbook fetch failed for %s: %s",
                             cycle.ticker, e)
+
+        # I-focus ang chart sa aktibong straddle market
+        self._chart_focus = (cycle.ticker, self._cycle_title or cycle.ticker)
+        if prices.get("yes_bid") and prices.get("yes_ask"):
+            ymid = (prices["yes_bid"] + prices["yes_ask"]) / 2.0
+            nmid = (prices["no_bid"] + prices["no_ask"]) / 2.0
+            self.marketTick.emit(
+                cycle.ticker, self._cycle_title or cycle.ticker, ymid, nmid
+            )
 
         # Paper: ipakain ang book snapshot para gumalaw ang simulated fills
         if isinstance(self.executor, KalshiPaperExecutor) and prices:

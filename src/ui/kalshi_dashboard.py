@@ -1,32 +1,42 @@
-"""Kalshi dashboard: status cards, market scanner table, straddle status,
-recent logs — parehong dark look ng Polymarket panel."""
+"""Kalshi dashboard — Kalshi.com-inspired layout:
+
+- status cards (Internet / Kalshi / Bot / Balance)
+- "Featured Market" card na may LIVE two-line probability chart (YES mint,
+  NO rose) + malalaking outcome percentages, tulad ng kalshi.com
+- scanned sports markets table (may pill status)
+- recent logs
+"""
 from __future__ import annotations
 
 import datetime as dt
 
 import qtawesome as qta
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QGridLayout,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QListWidget,
     QListWidgetItem,
     QPushButton,
-    QTableWidget,
-    QTableWidgetItem,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
 
 from src.storage.db import ScopedDatabase
 from src.ui import theme
-from src.ui.widgets import Card, StatCard, StatusCard
+from src.ui.kalshi_cards import GameCard, group_games
+from src.ui.kalshi_chart import KalshiChart
+from src.ui.widgets import Card, Pill, StatCard, StatusCard
+
+GRID_COLS = 2  # ilang game card kada row
 
 DEFAULT_PAPER_START = 1000.0
 
 LEVEL_COLORS = {
-    "INFO": theme.GREEN,
+    "INFO": theme.ACCENT,
     "TRADE": theme.ACCENT,
     "WARN": theme.AMBER,
     "ERROR": theme.RED,
@@ -38,12 +48,13 @@ class KalshiDashboard(QWidget):
         super().__init__()
         self._db = db
         self._live_mode = False
+        self._chart_ticker: str | None = None
 
         # ---- Status cards row -------------------------------------------
         self.cards = {
-            "internet": StatusCard("fa6s.globe", "Internet", "#3b82f6"),
+            "internet": StatusCard("fa6s.globe", "Internet", "#4c8dff"),
             "kalshi": StatusCard("fa6s.chart-column", "Kalshi",
-                                 theme.KALSHI_TEAL),
+                                 theme.KALSHI_ACCENT),
         }
         self.bot_card = StatCard("Bot Status", "STOPPED")
         self.bot_card.set_value("STOPPED", theme.RED)
@@ -53,52 +64,78 @@ class KalshiDashboard(QWidget):
         self.balance_card.setFixedWidth(RIGHT_COL_WIDTH)
 
         cards_row = QHBoxLayout()
-        cards_row.setSpacing(10)
+        cards_row.setSpacing(12)
         for card in self.cards.values():
             cards_row.addWidget(card, stretch=1)
         cards_row.addWidget(self.bot_card, stretch=1)
         cards_row.addWidget(self.balance_card)
 
-        # ---- Active straddle card ---------------------------------------
-        straddle_title = QLabel("Active Straddle")
-        straddle_title.setProperty("accent", True)
-        self._straddle_label = QLabel("—")
-        self._straddle_label.setWordWrap(True)
-        self._straddle_label.setStyleSheet("font-size: 14px; font-weight: bold")
+        # ---- Featured market card (chart) -------------------------------
+        self._live_pill = Pill("● LIVE", "bad")
+        self._market_title = QLabel("Waiting for a market…")
+        self._market_title.setProperty("h2", True)
+        self._straddle_pill = Pill("IDLE", "muted")
+
+        head = QHBoxLayout()
+        head.setSpacing(10)
+        head.addWidget(self._live_pill)
+        head.addWidget(self._market_title, stretch=1)
+        head.addWidget(self._straddle_pill)
+
+        # Outcome percentages (YES mint, NO rose) — parang kalshi.com
+        self._yes_lbl = QLabel("YES —")
+        self._yes_lbl.setStyleSheet(
+            f"color: {theme.ACCENT}; font-size: 20px; font-weight: 800")
+        self._no_lbl = QLabel("NO —")
+        self._no_lbl.setStyleSheet(
+            f"color: {theme.RED}; font-size: 20px; font-weight: 800")
+        outcomes = QHBoxLayout()
+        outcomes.setSpacing(22)
+        outcomes.addWidget(self._yes_lbl)
+        outcomes.addWidget(self._no_lbl)
+        outcomes.addStretch()
+
+        self.chart = KalshiChart()
 
         self._strategy_label = QLabel("Strategy: idle (press START BOT)")
         self._strategy_label.setProperty("muted", True)
         self._strategy_label.setWordWrap(True)
 
-        straddle_panel = Card()
-        straddle_col = QVBoxLayout(straddle_panel)
-        straddle_col.setContentsMargins(14, 12, 14, 12)
-        straddle_col.setSpacing(6)
-        straddle_col.addWidget(straddle_title)
-        straddle_col.addWidget(self._straddle_label)
-        straddle_col.addWidget(self._strategy_label)
+        featured = Card()
+        fc = QVBoxLayout(featured)
+        fc.setContentsMargins(16, 14, 16, 14)
+        fc.setSpacing(10)
+        fc.addLayout(head)
+        fc.addLayout(outcomes)
+        fc.addWidget(self.chart, stretch=1)
+        fc.addWidget(self._strategy_label)
 
-        # ---- Scanned markets table --------------------------------------
-        table_title = QLabel("Scanned Sports Markets (50/50 candidates)")
+        # ---- Scanned markets — Kalshi-style game cards grid -------------
+        table_title = QLabel("Live Sports Markets (50/50 candidates)")
         table_title.setProperty("accent", True)
 
-        self.table = QTableWidget(0, 7)
-        self.table.setHorizontalHeaderLabels(
-            ["Ticker", "Market", "YES bid/ask", "NO bid/ask",
-             "Volume", "Status", ""]
-        )
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
-        self.table.setColumnHidden(6, True)
-        self.table.verticalHeader().setVisible(False)
-        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._grid_host = QWidget()
+        self._grid = QGridLayout(self._grid_host)
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._grid.setSpacing(12)
+        self._grid.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        self._empty_hint = QLabel("Press START BOT to scan live sports "
+                                  "markets…")
+        self._empty_hint.setProperty("muted", True)
+        self._grid.addWidget(self._empty_hint, 0, 0)
+
+        mkt_scroll = QScrollArea()
+        mkt_scroll.setWidgetResizable(True)
+        mkt_scroll.setWidget(self._grid_host)
+        mkt_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
 
         markets_panel = Card()
+        markets_panel.setMinimumHeight(280)
         markets_col = QVBoxLayout(markets_panel)
-        markets_col.setContentsMargins(14, 12, 14, 12)
+        markets_col.setContentsMargins(16, 12, 16, 12)
         markets_col.addWidget(table_title)
-        markets_col.addWidget(self.table, stretch=1)
+        markets_col.addWidget(mkt_scroll, stretch=1)
 
         # ---- Recent logs panel ------------------------------------------
         logs_title = QLabel("Recent Logs")
@@ -118,23 +155,23 @@ class KalshiDashboard(QWidget):
         logs_panel = Card()
         logs_panel.setFixedWidth(RIGHT_COL_WIDTH)
         logs_col = QVBoxLayout(logs_panel)
-        logs_col.setContentsMargins(14, 12, 14, 12)
+        logs_col.setContentsMargins(16, 12, 16, 12)
         logs_col.addLayout(logs_head)
         logs_col.addWidget(self._log_list, stretch=1)
 
         # ---- Layout ------------------------------------------------------
         left_col = QVBoxLayout()
-        left_col.setSpacing(10)
-        left_col.addWidget(straddle_panel)
-        left_col.addWidget(markets_panel, stretch=1)
+        left_col.setSpacing(12)
+        left_col.addWidget(featured, stretch=1)
+        left_col.addWidget(markets_panel)
 
         body_row = QHBoxLayout()
-        body_row.setSpacing(10)
+        body_row.setSpacing(12)
         body_row.addLayout(left_col, stretch=1)
         body_row.addWidget(logs_panel)
 
         root = QVBoxLayout(self)
-        root.setSpacing(10)
+        root.setSpacing(12)
         root.addLayout(cards_row)
         root.addLayout(body_row, stretch=1)
 
@@ -143,30 +180,64 @@ class KalshiDashboard(QWidget):
 
     # ------------------------------------------------------------------ slots
 
+    def update_market_tick(self, ticker: str, title: str,
+                           yes_pct: float, no_pct: float) -> None:
+        if ticker != self._chart_ticker:
+            self._chart_ticker = ticker
+            self._market_title.setText(title or ticker)
+            self.chart.reset()
+        self.chart.add_tick(yes_pct, no_pct)
+        self._yes_lbl.setText(f"YES {yes_pct:.0f}%")
+        self._no_lbl.setText(f"NO {no_pct:.0f}%")
+
     def update_markets(self, rows: list) -> None:
-        self.table.setRowCount(0)
-        for row in rows:
-            r = self.table.rowCount()
-            self.table.insertRow(r)
-            ready = row.get("status") == "READY"
-            values = [
-                row.get("ticker", ""),
-                row.get("title", ""),
-                f"{row.get('yes_bid', 0)}¢ / {row.get('yes_ask', 0)}¢",
-                f"{row.get('no_bid', 0)}¢ / {row.get('no_ask', 0)}¢",
-                f"{row.get('volume', 0):,}",
-                "✓ READY" if ready else str(row.get("status", "")),
-            ]
-            for col, val in enumerate(values):
-                item = QTableWidgetItem(val)
-                if col == 5:
-                    item.setForeground(
-                        QColor(theme.GREEN if ready else theme.MUTED)
-                    )
-                self.table.setItem(r, col, item)
+        # Linisin ang grid
+        while self._grid.count():
+            item = self._grid.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+        games = group_games(rows)
+        # READY muna, tapos by volume — para nasa taas ang tradeable
+        games.sort(key=lambda g: (not g["ready"], -g["vol"]))
+        games = [g for g in games if len(g["teams"]) >= 2][:12]
+
+        if not games:
+            hint = QLabel("Scanning… no 50/50 candidate games yet."
+                          if rows else
+                          "Press START BOT to scan live sports markets…")
+            hint.setProperty("muted", True)
+            self._grid.addWidget(hint, 0, 0)
+            return
+
+        for i, game in enumerate(games):
+            self._grid.addWidget(GameCard(game), i // GRID_COLS,
+                                 i % GRID_COLS)
 
     def set_straddle_status(self, text: str) -> None:
-        self._straddle_label.setText(text)
+        # I-derive ang pill level mula sa state keyword. IMPORTANTE:
+        # unahin ang UNHEDGED (naglalaman ito ng "HEDGED" bilang substring
+        # kaya mamali ang LOCKED/HEDGED check kung mauna).
+        upper = text.upper()
+        if "UNHEDGED" in upper or "ERROR" in upper:
+            level, label = "bad", "UNHEDGED"
+        elif "LOCKED" in upper:
+            level, label = "ok", "LOCKED"
+        elif "HEDGED" in upper:
+            level, label = "ok", "HEDGED"
+        elif "HEDGING" in upper or "SENTINEL" in upper or "ONE_FILLED" in upper:
+            level, label = "warn", "HEDGING"
+        elif "CANCEL" in upper:
+            level, label = "muted", "CANCELLED"
+        elif "RESTING" in upper or "WORKING" in upper:
+            level, label = "info", "WORKING"
+        elif text.strip() in ("", "—"):
+            level, label = "muted", "IDLE"
+        else:
+            level, label = "info", "ACTIVE"
+        self._straddle_pill.set(label, level)
+        self._straddle_pill.setToolTip(text)
 
     def set_strategy_status(self, text: str) -> None:
         self._strategy_label.setText(f"Strategy: {text}")
@@ -177,14 +248,15 @@ class KalshiDashboard(QWidget):
 
     def set_bot_state(self, state: str) -> None:
         running = state == "RUNNING"
-        self.bot_card.set_value(state, theme.GREEN if running else theme.RED)
+        self.bot_card.set_value(state, theme.ACCENT if running else theme.RED)
+        if not running:
+            self._straddle_pill.set("IDLE", "muted")
 
     def refresh_balance(self) -> None:
         if self._live_mode:
             return  # sa live mode, ang engine ang nagpapadala ng balance
         start = float(self._db.get_setting("paper_start_usd",
                                            DEFAULT_PAPER_START))
-        # Cash-style: ibawas ang cost ng aktibong straddle (open orders)
         open_cost = 0.0
         import json
         raw = self._db.get_setting("open_straddle", "")
@@ -197,7 +269,7 @@ class KalshiDashboard(QWidget):
             except (ValueError, TypeError):
                 pass
         balance = start + self._db.total_pnl() - open_cost
-        color = theme.GREEN if balance >= start else theme.RED
+        color = theme.ACCENT if balance >= start else theme.RED
         self.balance_card.set_value(f"{balance:,.2f} USD", color)
         self.balance_card.set_sub(
             f"Simulated — ${open_cost:,.0f} in working straddle"
@@ -216,7 +288,7 @@ class KalshiDashboard(QWidget):
             self.refresh_balance()
 
     def set_live_balance(self, balance: float) -> None:
-        self.balance_card.set_value(f"{balance:,.2f} USD", theme.GREEN)
+        self.balance_card.set_value(f"{balance:,.2f} USD", theme.ACCENT)
 
     def add_log(self, level: str, message: str) -> None:
         ts = dt.datetime.now().strftime("%H:%M:%S")

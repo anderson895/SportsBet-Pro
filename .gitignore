@@ -9,3 +9,5 @@ dist/
 reference/kalshi_strategies.txt
 kalshi_sample.json
 kalshi_orderbook.json
+kalshi_candles.json
+kalshi_demo_status.json

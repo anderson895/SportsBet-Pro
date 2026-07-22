@@ -67,6 +67,8 @@ class MainWindow(QMainWindow):
                 "Paper mode simulates every trade with no real money.\n"
                 "Switch to Live mode in Settings to trade with real USDC on Polymarket."
             ),
+            accent=theme.POLY_ACCENT,
+            accent_dim=theme.POLY_ACCENT_DIM,
         )
 
         # ---- Kalshi panel -----------------------------------------------
@@ -92,6 +94,8 @@ class MainWindow(QMainWindow):
                 "Paper mode uses live public Kalshi market data with simulated fills.\n"
                 "Live mode needs your Kalshi API Key ID + RSA private key (Settings)."
             ),
+            accent=theme.KALSHI_ACCENT,
+            accent_dim=theme.KALSHI_ACCENT_DIM,
         )
 
         # ---- Poly-specific signal wiring (chart, stretch, atbp.) --------
@@ -109,6 +113,7 @@ class MainWindow(QMainWindow):
 
         # ---- Kalshi-specific wiring -------------------------------------
         kalshi_engine.marketsScanned.connect(kalshi_dash.update_markets)
+        kalshi_engine.marketTick.connect(kalshi_dash.update_market_tick)
         kalshi_engine.strategyStatus.connect(kalshi_dash.set_strategy_status)
         kalshi_engine.straddleStatus.connect(kalshi_dash.set_straddle_status)
         kalshi_engine.liveBalance.connect(kalshi_dash.set_live_balance)
@@ -128,6 +133,17 @@ class MainWindow(QMainWindow):
 
         self._tab_poly = QPushButton("Polymarket")
         self._tab_kalshi = QPushButton("Kalshi")
+        # Bawat tab ay may sariling accent underline kapag active
+        self._tab_poly.setStyleSheet(
+            f'QPushButton[exchangeTab="true"][active="true"] {{ '
+            f'border-bottom: 3px solid {theme.POLY_ACCENT}; '
+            f'color: {theme.TEXT}; }}'
+        )
+        self._tab_kalshi.setStyleSheet(
+            f'QPushButton[exchangeTab="true"][active="true"] {{ '
+            f'border-bottom: 3px solid {theme.KALSHI_ACCENT}; '
+            f'color: {theme.TEXT}; }}'
+        )
         for btn in (self._tab_poly, self._tab_kalshi):
             btn.setProperty("exchangeTab", True)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)

@@ -32,6 +32,7 @@ from src.storage.db import ScopedDatabase
 from src.ui import theme
 from src.ui.alert_banner import AlertBanner
 from src.ui.pages import AboutPage, LogsPage, StatsPage, TradesPage
+from src.ui.widgets import panel_accent_qss
 
 
 class BottomBar(QFrame):
@@ -145,6 +146,8 @@ class ExchangePanel(QWidget):
         risk_setting: tuple[str, float],  # (settings key, default)
         about_title: str,
         about_body: str,
+        accent: str = theme.ACCENT,
+        accent_dim: str = theme.ACCENT_DIM,
     ) -> None:
         super().__init__()
         self._engine = engine
@@ -152,6 +155,9 @@ class ExchangePanel(QWidget):
         self._risk_key, self._risk_default = risk_setting
         self._currency = currency
         self._market_text = market_text
+        self._accent = accent
+        # Per-exchange accent tint sa buong panel subtree
+        self.setStyleSheet(panel_accent_qss(accent, accent_dim))
 
         self.dash = dashboard
         self.settings = settings_page
