@@ -36,6 +36,11 @@ def setup_logging() -> None:
 
     # Uncaught exceptions sa main thread -> app.log na may full traceback
     def _excepthook(exc_type, exc, tb) -> None:
+        # Ctrl+C / pagsara ng window = normal na paglabas, hindi crash —
+        # huwag itong itala bilang CRITICAL para hindi nakakatakot ang log
+        if issubclass(exc_type, KeyboardInterrupt):
+            logger.info("Shutdown requested (Ctrl+C)")
+            return
         logger.critical("UNCAUGHT EXCEPTION", exc_info=(exc_type, exc, tb))
         sys.__excepthook__(exc_type, exc, tb)
 
