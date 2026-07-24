@@ -170,7 +170,13 @@ class ExchangePanel(QWidget):
         self.dash = dashboard
         self.settings = settings_page
         self.logs = LogsPage(db)
-        self.trades = TradesPage(db, currency)
+        # Ang "Sync from exchange" ay para lang sa engine na may fill-history
+        # API (Kalshi) — walang button kung wala nito
+        self.trades = TradesPage(
+            db, currency,
+            on_sync=(self._on_sync_history
+                     if hasattr(engine, "sync_fills_from_kalshi") else None),
+        )
         self.stats = StatsPage(db, currency)
 
         # Ang page nav (Dashboard/Settings/...) ay SHARED na sa main window
@@ -257,6 +263,28 @@ class ExchangePanel(QWidget):
         self.stats.refresh()
         if hasattr(self.dash, "refresh_balance"):
             self.dash.refresh_balance()
+
+    def _on_sync_history(self) -> None:
+        """Kunin ang totoong fill history sa exchange at ipasok sa DB."""
+        async def _run() -> None:
+            try:
+                imported, total = await self._engine.sync_fills_from_kalshi()
+                self.trades.reload()
+                self.stats.refresh()
+                self.trades.set_status(
+                    f"Synced — {imported} new fill(s) imported "
+                    f"({total} in exchange history)",
+                    theme.GREEN,
+                )
+            except Exception as e:
+                self.trades.set_status(f"Sync failed: {e}", theme.RED)
+
+        self.trades.set_status("Fetching fill history from the exchange…",
+                               theme.AMBER)
+        try:
+            asyncio.create_task(_run())
+        except RuntimeError:
+            pass  # walang running event loop (hal. sa UI tests)
 
     def _tick_uptime(self) -> None:
         self._uptime_secs += 1

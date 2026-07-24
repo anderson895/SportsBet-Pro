@@ -213,6 +213,22 @@ class KalshiClient:
             "DELETE", f"/portfolio/events/orders/{order_id}", auth=True
         )
 
+    async def get_fills(self, limit: int = 200,
+                        ticker: Optional[str] = None) -> list[dict]:
+        """Totoong fill history mula sa Kalshi (hindi ang lokal na tala).
+
+        Ito ang ground truth: kung ano talaga ang nabili/naibenta, kailan,
+        sa anong presyo, at magkano ang fee — kahit na-restart ang app o
+        napalampas ng bot ang isang fill.
+        """
+        params: dict[str, Any] = {"limit": limit}
+        if ticker:
+            params["ticker"] = ticker
+        data = await self._request(
+            "GET", "/portfolio/fills", params=params, auth=True
+        )
+        return data.get("fills", [])
+
     async def get_positions(self, ticker: Optional[str] = None) -> list[dict]:
         params = {"ticker": ticker} if ticker else None
         data = await self._request(

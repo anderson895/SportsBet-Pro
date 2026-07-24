@@ -103,14 +103,28 @@ class Database:
         status: str = "OPEN",
         pnl: Optional[float] = None,
         meta: Optional[str] = None,
+        ts: Optional[str] = None,
     ) -> int:
         cur = self._conn.execute(
             "INSERT INTO trades (exchange, ts, market, side, action, price, size,"
             " status, pnl, meta) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (exchange, _utc_now(), market, side, action, price, size, status, pnl, meta),
+            (exchange, ts or _utc_now(), market, side, action, price, size,
+             status, pnl, meta),
         )
         self._conn.commit()
         return int(cur.lastrowid)
+
+    def has_trade_meta(self, exchange: str, meta: str) -> bool:
+        """May naitala na bang trade na may ganitong meta (hal. fill_id)?
+
+        Ginagamit sa pag-import ng history mula sa exchange para hindi
+        madoble ang parehong fill sa tuwing magsi-sync.
+        """
+        cur = self._conn.execute(
+            "SELECT 1 FROM trades WHERE exchange = ? AND meta = ? LIMIT 1",
+            (exchange, meta),
+        )
+        return cur.fetchone() is not None
 
     def recent_trades(self, exchange: str, limit: int = 100) -> list[sqlite3.Row]:
         cur = self._conn.execute(
@@ -196,10 +210,15 @@ class ScopedDatabase:
         status: str = "OPEN",
         pnl: Optional[float] = None,
         meta: Optional[str] = None,
+        ts: Optional[str] = None,
     ) -> int:
         return self._db.add_trade(
-            self.exchange, market, side, action, price, size, status, pnl, meta
+            self.exchange, market, side, action, price, size, status, pnl,
+            meta, ts,
         )
+
+    def has_trade_meta(self, meta: str) -> bool:
+        return self._db.has_trade_meta(self.exchange, meta)
 
     def recent_trades(self, limit: int = 100) -> list[sqlite3.Row]:
         return self._db.recent_trades(self.exchange, limit)

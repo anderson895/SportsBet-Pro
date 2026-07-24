@@ -658,6 +658,93 @@ class KalshiEngine(QObject):
         except Exception as e:
             filelog.warning("Balance refresh failed: %s", e)
 
+    # ----------------------------------------------------------- history sync
+
+    async def _authed_client(self) -> tuple[KalshiClient, bool]:
+        """(client, owned) — authenticated na Kalshi client.
+
+        Kung LIVE ang session, gamitin ang existing na naka-auth na client;
+        kung hindi (STOPPED o paper feed lang, na public), gumawa ng
+        pansamantala mula sa naka-save na credentials. `owned=True` =
+        tayo ang gumawa kaya tayo rin ang magsasara.
+        """
+        if self._client is not None and self._client.has_auth:
+            return self._client, False
+
+        key_id = secret_store.get_secret(secret_store.KEY_KALSHI_API_ID)
+        pem = secret_store.get_secret(secret_store.KEY_KALSHI_PEM)
+        if not pem:
+            pem = str(self._db.get_setting("pem_path", "")).strip() or None
+        if not key_id or not pem:
+            raise KalshiError(
+                "Add your Kalshi API Key ID and RSA private key in Settings "
+                "first — they are needed to read your account history."
+            )
+        env = str(self._db.get_setting("env", "prod"))
+        return KalshiClient(env=env, key_id=key_id,
+                            private_key_pem=pem), True
+
+    async def sync_fills_from_kalshi(self) -> tuple[int, int]:
+        """I-import ang TOTOONG fill history mula sa Kalshi papasok sa DB.
+
+        Ang lokal na tala ay isinusulat kapag NAG-PLACE ng order — kaya
+        kung na-restart ang app o napalampas ang isang fill, hindi
+        tumutugma ang Trades table sa totoong nangyari sa account. Dito
+        kinukuha ang ground truth mula sa /portfolio/fills at idinadagdag
+        ang mga bagong fill lang (dedup gamit ang fill_id).
+
+        Ibinabalik: (bilang na na-import, kabuuang fills na nakita).
+
+        Gumagawa ito ng SARILING authenticated client — read-only account
+        query lang ito, kaya hindi kailangang naka-START ang bot (ang
+        always-on feed client ay public/walang auth).
+        """
+        client, owned = await self._authed_client()
+        try:
+            fills = await client.get_fills(limit=200)
+        finally:
+            if owned:
+                await client.aclose()
+        imported = 0
+        for f in fills:
+            fill_id = str(f.get("fill_id") or f.get("trade_id") or "")
+            if not fill_id:
+                continue
+            meta = f"kalshi_fill:{fill_id}"
+            if self._db.has_trade_meta(meta):
+                continue
+
+            # Ang outcome_side ang nagsasabi kung ANONG kontrata ang
+            # napunta sa atin (yes/no) — iyon ang totoong side natin.
+            outcome = str(f.get("outcome_side") or f.get("side") or "").lower()
+            price_key = ("yes_price_dollars" if outcome == "yes"
+                         else "no_price_dollars")
+            price = float(f.get(price_key) or 0.0)
+            count = float(f.get("count_fp") or f.get("count") or 0.0)
+            ts_raw = str(f.get("created_time") or "")
+
+            self._db.add_trade(
+                market=str(f.get("ticker") or f.get("market_ticker") or ""),
+                side=outcome.upper() or "?",
+                action="BUY",
+                price=price,
+                size=count * price,
+                status="FILLED",
+                meta=meta,
+                ts=ts_raw or None,
+            )
+            imported += 1
+
+        if imported:
+            self.tradeExecuted.emit()
+            self.log("INFO", f"Synced {imported} new fill(s) from Kalshi "
+                             f"({len(fills)} in history)")
+        else:
+            self.log("INFO", f"Already up to date — {len(fills)} fill(s) "
+                             "in Kalshi history, nothing new")
+        await self._refresh_balance()
+        return imported, len(fills)
+
     # ---------------------------------------------------------- persistence
 
     def _persist_cycle(self) -> None:
