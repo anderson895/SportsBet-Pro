@@ -209,10 +209,12 @@ class KalshiDashboard(QWidget):
         logs_col.addWidget(self._log_list, stretch=1)
 
         # ---- Layout ------------------------------------------------------
+        # Hatiin ang vertical space: featured chart ~55%, markets ~45% —
+        # para hindi ma-clip/masikip ang game cards
         left_col = QVBoxLayout()
         left_col.setSpacing(12)
-        left_col.addWidget(featured, stretch=1)
-        left_col.addWidget(markets_panel)
+        left_col.addWidget(featured, stretch=11)
+        left_col.addWidget(markets_panel, stretch=9)
 
         body_row = QHBoxLayout()
         body_row.setSpacing(12)
@@ -220,6 +222,7 @@ class KalshiDashboard(QWidget):
         body_row.addWidget(logs_panel)
 
         root = QVBoxLayout(self)
+        root.setContentsMargins(12, 10, 12, 6)
         root.setSpacing(12)
         root.addLayout(cards_row)
         root.addLayout(body_row, stretch=1)

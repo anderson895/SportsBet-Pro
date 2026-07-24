@@ -420,9 +420,25 @@ class KalshiEngine(QObject):
             )
             return
 
-        target = ranked[0]
         risk = float(self._db.get_setting("risk_usd", DEFAULTS["risk_usd"]))
         entry = cfg.entry_price_cents
+
+        # Post-only guard: ang resting BUY @ entry ay dapat HINDI tumawid sa
+        # book (entry < ask sa PAREHONG side), kung hindi ay ire-reject ng
+        # Kalshi ("post only cross"). Piliin ang unang candidate na ligtas.
+        target = None
+        for cand in ranked:
+            if entry < cand.yes_ask and entry < cand.no_ask:
+                target = cand
+                break
+        if target is None:
+            self.strategyStatus.emit(
+                f"WAITING — {len(ranked)} candidate(s) found but a {entry}¢ "
+                f"bid would cross the book (ask ≤ {entry}¢); waiting for a "
+                "wider spread"
+            )
+            return
+
         count = straddle_sizing(risk, entry, entry)
         if count < 1:
             self.strategyStatus.emit(
@@ -434,6 +450,15 @@ class KalshiEngine(QObject):
         try:
             await self.executor.place_straddle(target.ticker, entry, count)
         except Exception as e:
+            if "post only cross" in str(e).lower():
+                # Gumalaw ang book sa pagitan ng scan at placement — hindi
+                # ito error; susubukan ulit sa susunod na scan.
+                filelog.info("Post-only would cross on %s — skipping this "
+                             "round", target.ticker)
+                self.log("WARN", f"Market moved on {target.ticker} — "
+                                 f"{entry}¢ bid would cross the book; "
+                                 "will retry next scan")
+                return
             filelog.exception("Straddle placement failed:")
             self.log("ERROR", f"Straddle placement failed on "
                               f"{target.ticker}: {e}")

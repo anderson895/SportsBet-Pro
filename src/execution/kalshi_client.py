@@ -169,21 +169,35 @@ class KalshiClient:
         post_only: bool = True,
         client_order_id: Optional[str] = None,
     ) -> dict:
-        """Limit BUY order sa napiling side. Ibinabalik ang order dict."""
+        """Limit BUY order sa napiling side. Ibinabalik ang order dict.
+
+        Kalshi V2 orders API (POST /portfolio/events/orders) — lahat ay
+        ini-express mula sa YES perspective:
+          - BUY YES @ p¢  -> side="bid",  price = p/100
+          - BUY NO  @ p¢  -> side="ask",  price = (100 - p)/100
+            (ang pag-benta ng YES @ (100-p)¢ ay katumbas ng pagbili ng NO @ p¢)
+        Kaya gumagana ito para sa parehong resting maker legs AT sa hedge:
+        ang "ask" leg ay nagsa-scratch/flatten ng anumang hawak na YES.
+        """
         side = side.lower()
+        if side == "yes":
+            v2_side = "bid"
+            v2_price_cents = price_cents
+        else:  # 'no' -> sell YES @ (100 - price)
+            v2_side = "ask"
+            v2_price_cents = 100 - price_cents
         body = {
             "ticker": ticker,
             "client_order_id": client_order_id or str(uuid.uuid4()),
-            "action": "buy",
-            "side": side,
-            "type": "limit",
-            "count": count,
-            # yes_price para sa YES side, no_price para sa NO side (cents)
-            ("yes_price" if side == "yes" else "no_price"): price_cents,
+            "side": v2_side,
+            "count": f"{int(count):.2f}",           # FixedPointCount, hal. "10.00"
+            "price": f"{v2_price_cents / 100:.2f}",  # FixedPointDollars, hal. "0.49"
+            "time_in_force": "good_till_canceled",
+            "self_trade_prevention_type": "taker_at_cross",
             "post_only": post_only,
         }
         data = await self._request(
-            "POST", "/portfolio/orders", json_body=body, auth=True
+            "POST", "/portfolio/events/orders", json_body=body, auth=True
         )
         return data.get("order", data)
 
@@ -194,8 +208,9 @@ class KalshiClient:
         return data.get("order", data)
 
     async def cancel_order(self, order_id: str) -> dict:
+        # V2 cancel endpoint (matches create endpoint family)
         return await self._request(
-            "DELETE", f"/portfolio/orders/{order_id}", auth=True
+            "DELETE", f"/portfolio/events/orders/{order_id}", auth=True
         )
 
     async def get_positions(self, ticker: Optional[str] = None) -> list[dict]:

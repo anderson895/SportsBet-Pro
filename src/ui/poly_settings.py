@@ -28,10 +28,11 @@ from PySide6.QtWidgets import (
 from src.core import secrets
 from src.storage.db import ScopedDatabase
 from src.ui import theme
+from src.ui.settings_header import SettingsHeader, recommended_risk
 from src.ui.widgets import Card
 
 DEFAULTS = {
-    "risk_usdc": 200.0,
+    "risk_usdc": 10.0,  # maliit na default — ligtas sa unang subok
     "min_stretch_pct": 1.5,
     "max_stretch_pct": 2.5,
     "profit_target_pct": 100.0,
@@ -244,21 +245,22 @@ class PolySettingsPage(QWidget):
         self._mode.currentIndexChanged.connect(_toggle_mode_fields)
         _toggle_mode_fields(self._mode.currentIndex())
 
-        # --- Buttons ------------------------------------------------------
-        save_btn = QPushButton("  Save Settings")
-        save_btn.setIcon(qta.icon("fa6s.floppy-disk", color="white"))
-        save_btn.setObjectName("accentBtn")  # primary action = active color
-        reset_btn = QPushButton("  Reset")
-        reset_btn.setIcon(qta.icon("fa6s.rotate", color=theme.TEXT))
-        save_btn.clicked.connect(self._save)
-        reset_btn.clicked.connect(self._reset)
-
-        btn_row = QHBoxLayout()
-        btn_row.addWidget(save_btn, stretch=1)
-        btn_row.addWidget(reset_btn)
-
-        self._status = QLabel("")
-        self._status.setProperty("muted", True)
+        # --- Sticky header (balance + Save/Reset/Recommended) -------------
+        # Nasa LABAS ng scroll area para laging kita ang Save — hindi na
+        # makakalimutang i-save bago pindutin ang START BOT.
+        self.header = SettingsHeader(
+            currency="USDC",
+            on_save=self._save,
+            on_reset=self._reset,
+            on_recommend=self._apply_recommended,
+            on_refresh=self._fetch_balance,
+        )
+        self._last_balance: float | None = None
+        self._balance_fetched_ts = 0.0
+        # Pag-palit ng Paper/Live: ibang balance ang dapat ipakita
+        self._mode.currentIndexChanged.connect(
+            lambda _i: self._fetch_balance()
+        )
 
         note = QLabel(
             "Secrets are stored in Windows Credential Manager, never in files.\n"
@@ -273,9 +275,6 @@ class PolySettingsPage(QWidget):
         panel_col.setSpacing(10)
         panel_col.addWidget(title)
         panel_col.addLayout(form)
-        panel_col.addSpacing(4)
-        panel_col.addLayout(btn_row)
-        panel_col.addWidget(self._status)
         panel_col.addWidget(note)
 
         # Scroll para hindi masiksik (at ma-clip) ang mga input sa maliliit
@@ -292,6 +291,8 @@ class PolySettingsPage(QWidget):
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(8)
+        root.addWidget(self.header)
         root.addWidget(scroll)
 
     # ------------------------------------------------------------------ save
@@ -334,8 +335,89 @@ class PolySettingsPage(QWidget):
     # -------------------------------------------------- credential check
 
     def _set_status(self, text: str, color: str) -> None:
-        self._status.setText(text)
-        self._status.setStyleSheet(f"color: {color}")
+        self.header.set_status(text, color)
+
+    # ------------------------------------------------ balance + recommend
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        """Unang bukas ng page (o balik dito): i-fetch ang balance para
+        UNA itong makita bago mag-configure."""
+        super().showEvent(event)
+        if time.monotonic() - self._balance_fetched_ts > 60:
+            self._fetch_balance()
+
+    def _fetch_balance(self) -> None:
+        self._balance_fetched_ts = time.monotonic()
+
+        # Paper mode: paper balance = starting balance + naipong PnL
+        if self._mode.currentIndex() == 0:
+            start = float(self._db.get_setting(
+                "paper_start_usdc", DEFAULTS["paper_start_usdc"]))
+            bal = start + self._db.total_pnl()
+            self._last_balance = bal
+            self.header.set_balance(bal, "Paper balance (simulated)")
+            return
+
+        pk = secrets.get_secret(secrets.KEY_PM_PRIVATE)
+        funder = secrets.get_secret(secrets.KEY_PM_FUNDER)
+        if not pk or not funder:
+            self.header.set_balance(
+                None, "Add Private Key + Funder below, then Save")
+            return
+        sig_type = int(self._sig_types[self._wallet_type.currentIndex()][1])
+        self.header.set_balance(None, "Fetching live balance…")
+
+        def _check() -> float:
+            from src.execution.polymarket import PolymarketClient
+            client = PolymarketClient(
+                private_key=pk, funder=funder, signature_type=sig_type
+            )
+            client.connect()
+            return client.get_usdc_balance()
+
+        async def _run() -> None:
+            try:
+                bal = await asyncio.to_thread(_check)
+                self._last_balance = bal
+                self.header.set_balance(bal, "Real USDC on Polymarket")
+            except Exception as e:
+                self.header.set_balance(None, f"Balance fetch failed: {e}")
+
+        try:
+            asyncio.create_task(_run())
+        except RuntimeError:
+            pass  # walang running event loop (hal. sa UI tests)
+
+    def _apply_recommended(self) -> None:
+        """Isang click: ligtas na testing values na pasok sa balance.
+
+        Risk ≈ 10% ng balance (min 2 USDC); ibang strategy knobs ay
+        binabalik sa proven defaults.
+        """
+        # Walang balance = hindi pa masasabi kung magkano ang ligtas.
+        # Mag-fetch muna kaysa mag-alok ng maling maliit na halaga.
+        if self._last_balance is None:
+            self._fetch_balance()
+            self._set_status(
+                "Fetching your balance first — click Apply Recommended "
+                "again in a moment so the risk can be sized to it.",
+                theme.AMBER,
+            )
+            return
+
+        rec = recommended_risk(self._last_balance, minimum=2.0)
+        self._risk.setValue(rec)
+        self._min_stretch.setValue(DEFAULTS["min_stretch_pct"])
+        self._max_stretch.setValue(DEFAULTS["max_stretch_pct"])
+        self._profit.setValue(DEFAULTS["profit_target_pct"])
+        self._volume_mult.setValue(DEFAULTS["volume_spike_mult"])
+        self._premium.setValue(DEFAULTS["premium_threshold_pct"])
+        self._set_status(
+            f"Recommended values applied — Risk {rec:,.2f} USDC (10% of your "
+            f"{self._last_balance:,.2f} USDC balance), stretch 1.5/2.5%, "
+            "TP 100%. Click Save Settings to apply.",
+            theme.AMBER,
+        )
 
     def _validate_credentials(self) -> None:
         """Pagkatapos mag-Save: i-verify ang Polymarket credentials at
@@ -386,6 +468,8 @@ class PolySettingsPage(QWidget):
                         theme.AMBER,
                     )
                 if self._mode.currentIndex() == 1:  # Live ang naka-save
+                    self._last_balance = balance
+                    self.header.set_balance(balance, "Real USDC on Polymarket")
                     self.liveBalanceChecked.emit(balance)
             except Exception as e:
                 self._set_status(
@@ -414,4 +498,5 @@ class PolySettingsPage(QWidget):
         self._premium.setValue(DEFAULTS["premium_threshold_pct"])
         self._econ_day.setChecked(False)
         self._paper_start.setValue(DEFAULTS["paper_start_usdc"])
-        self._status.setText("Defaults restored — click Save Settings to apply")
+        self._set_status("Defaults restored — click Save Settings to apply",
+                         theme.MUTED)

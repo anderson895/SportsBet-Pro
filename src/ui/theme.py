@@ -294,7 +294,9 @@ QToolButton {{ background: transparent; border: none; color: {MUTED};
     font-size: 14px; }}
 QToolButton:hover {{ color: {TEXT}; }}
 
-QCheckBox {{ spacing: 8px; padding: 2px 0; }}
+/* transparent — kung hindi, mamana ng QCheckBox ang window BG at
+   magmumukhang itim na bar sa ibabaw ng card */
+QCheckBox {{ spacing: 8px; padding: 2px 0; background: transparent; }}
 QCheckBox::indicator {{
     width: 17px; height: 17px;
     border: 1px solid {BORDER}; border-radius: 5px;

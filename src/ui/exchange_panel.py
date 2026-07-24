@@ -191,8 +191,8 @@ class ExchangePanel(QWidget):
 
         # ---- layout (content -> bottom bar)
         root = QVBoxLayout(self)
-        root.setContentsMargins(8, 4, 4, 4)
-        root.setSpacing(8)
+        root.setContentsMargins(6, 6, 6, 8)
+        root.setSpacing(10)
         root.addWidget(self.alert)
         root.addWidget(self._stack, stretch=1)
         root.addWidget(self.bottom)

@@ -164,6 +164,7 @@ class PolyDashboard(QWidget):
         body_row.addWidget(logs_panel)
 
         root = QVBoxLayout(self)
+        root.setContentsMargins(12, 10, 12, 6)
         root.setSpacing(10)
         root.addLayout(cards_row)
         root.addLayout(body_row, stretch=1)

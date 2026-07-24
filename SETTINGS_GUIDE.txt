@@ -1,0 +1,143 @@
+=====================================================================
+ SportsBet Pro — Settings Guide (what each field does)
+=====================================================================
+
+Each panel (Polymarket / Kalshi) has its own settings. Short version:
+- Paper mode = fake money (safe testing). Live mode = real money.
+- Leave any secret field blank to keep the current saved value.
+
+The bar at the TOP of every Settings page (always visible):
+  AVAILABLE BALANCE   Your current balance, fetched automatically when
+                      you open the page (real balance in Live mode,
+                      simulated balance in Paper mode). Click the small
+                      refresh icon to re-check.
+  Apply Recommended   One click fills the form with safe testing values
+                      sized to your balance (risk = ~10% of balance,
+                      strategy knobs at proven defaults). Review the
+                      values, then click Save Settings.
+  Save Settings       Saves everything on the page. ALWAYS click this
+                      after making changes — before pressing START BOT.
+  Reset               Restores default strategy values (not saved until
+                      you click Save Settings).
+
+
+=====================================================================
+ KALSHI PANEL — Settings
+=====================================================================
+
+Trading Mode
+  Paper = simulated fills, no real money (safe).
+  Live  = places real orders on Kalshi (needs API key + funds).
+
+Environment
+  Production = the real kalshi.com (real money).
+  Demo       = demo.kalshi.co (practice money, for testing).
+
+Kalshi API Key ID
+  Your API key ID from kalshi.com -> Account Settings -> API Keys.
+
+RSA Private Key (paste PEM) / File Path
+  The private key (.pem) that pairs with your API Key ID.
+  Paste the whole PEM text, OR give the path to the .pem file.
+
+Risk Per Straddle (USD)
+  How much money to put into ONE straddle (both YES + NO combined).
+  Example: $20 -> buys ~20 pairs at 49c+49c.
+
+Entry Price (resting bid per side)
+  The price (in cents) to bid on EACH side. Default 49c.
+  Buy YES @ 49c + NO @ 49c = 98c cost; one side settles at $1.00.
+  Lower = more profit but harder to fill; keep near 49c.
+
+Hedge Sentinel — max hedge price
+  If only ONE side fills, the bot buys the missing side up to this
+  price (default 51c) to "scratch" out and avoid a one-sided bet.
+  49c + 51c = $1.00 -> breakeven (loses only fees).
+
+Hedge Sentinel — single-sided timeout
+  How long (seconds) to wait with only one side filled before the
+  Hedge Sentinel steps in (default 90s).
+
+Minimum Market Volume
+  Only trade games with at least this many contracts of volume.
+  Higher = more liquid/safer fills. Lower = more candidates appear.
+
+Skip markets closing sooner than
+  Ignore games ending within this many minutes (avoids the chaotic
+  final minutes of a game). Default 45 min.
+
+Skip markets closing later than
+  Ignore games that are still hours away (default 12 h) — trade
+  markets that are active now.
+
+Sports to Trade
+  Check the leagues to scan for 50/50 games (baseball, basketball,
+  football, hockey, soccer...). Leave all unchecked = auto-discover
+  whatever is active.
+
+Paper Starting Balance (USD)
+  The pretend starting balance shown in Paper mode.
+
+
+=====================================================================
+ POLYMARKET PANEL — Settings
+=====================================================================
+
+Trading Mode
+  Paper = simulated. Live = real USDC on Polymarket.
+
+Market Timeframe
+  Which BTC Up/Down market to trade: Daily / 4h / 1h / 15m.
+  Strategy timings and thresholds auto-scale to the choice.
+
+Polymarket Private Key
+  Your wallet's private key (from Polymarket export / your wallet).
+
+Funder / Proxy Address
+  Your Polymarket PROXY / "Address (For API use only)" — NOT your
+  plain wallet address. Copy it from polymarket.com -> Settings.
+
+Polymarket Wallet Type
+  Magic (Email/Google) = older email accounts.
+  MetaMask             = browser-wallet accounts.
+  Deposit Wallet       = accounts made after Apr 2026 (most common now).
+  Pick the wrong one and the balance shows 0.00 even with funds.
+
+Risk Per Trade (USDC)
+  How much USDC to put into one trade.
+
+Entry Stretch Band (%)
+  Minimum BTC move from the open before buying (default 1.5%).
+
+Max Stretch — Death Trap Limit (%)
+  If BTC has moved MORE than this (default 2.5%), skip — it may be a
+  momentum day, not a mean-reversion day.
+
+Take Profit (%)
+  Sell when the position is up this % (default +100%).
+
+Volume Spike Filter — block entry above (x)
+  Skip entries when recent volume is this many times the baseline
+  (default 2x) — sign of institutional momentum.
+
+Coinbase Premium Filter — block entry above (+-%)
+  Skip entries when the Coinbase-vs-Binance premium is too large
+  (default 0.15%) — sign of aggressive US spot flow.
+
+Economic Data Day (checkbox)
+  Check this to block ALL entries today (Fed meeting, CPI, etc.) —
+  those are trend days, not mean-reversion days.
+
+Paper Starting Balance (USDC)
+  The pretend starting balance shown in Paper mode.
+
+
+=====================================================================
+ Quick tips
+=====================================================================
+- Start in PAPER mode until you trust the behavior.
+- Kalshi trades only genuine ~50/50 games (48-52c) — these are rare,
+  so the bot may sit idle. That is normal, not a bug.
+- Secrets are stored in Windows Credential Manager (large Kalshi keys
+  go to data\kalshi_key.pem). Never share them.
+=====================================================================

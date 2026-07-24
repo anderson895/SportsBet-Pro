@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 from src.core import secrets
 from src.storage.db import ScopedDatabase
 from src.ui import theme
+from src.ui.settings_header import SettingsHeader, recommended_risk
 from src.ui.widgets import Card
 
 # Friendly na sport name -> Kalshi series ticker. Ito ang ipinapakita bilang
@@ -56,7 +57,7 @@ SPORT_OPTIONS = [
 ]
 
 DEFAULTS = {
-    "risk_usd": 100.0,
+    "risk_usd": 5.0,  # maliit na default — ligtas sa unang subok
     "entry_price_cents": 49,
     "hedge_timeout_secs": 90.0,
     "hedge_max_price": 51,
@@ -271,22 +272,22 @@ class KalshiSettingsPage(QWidget):
         self._mode.currentIndexChanged.connect(_toggle_mode_fields)
         _toggle_mode_fields(self._mode.currentIndex())
 
-        # --- Buttons ------------------------------------------------------
-        save_btn = QPushButton("  Save Settings")
-        save_btn.setIcon(qta.icon("fa6s.floppy-disk", color="white"))
-        save_btn.setObjectName("accentBtn")
-        reset_btn = QPushButton("  Reset")
-        reset_btn.setIcon(qta.icon("fa6s.rotate", color=theme.TEXT))
-        save_btn.clicked.connect(self._save)
-        reset_btn.clicked.connect(self._reset)
-
-        btn_row = QHBoxLayout()
-        btn_row.addWidget(save_btn, stretch=1)
-        btn_row.addWidget(reset_btn)
-
-        self._status = QLabel("")
-        self._status.setProperty("muted", True)
-        self._status.setWordWrap(True)
+        # --- Sticky header (balance + Save/Reset/Recommended) -------------
+        # Nasa LABAS ng scroll area para laging kita ang Save — hindi na
+        # makakalimutang i-save bago pindutin ang START BOT.
+        self.header = SettingsHeader(
+            currency="USD",
+            on_save=self._save,
+            on_reset=self._reset,
+            on_recommend=self._apply_recommended,
+            on_refresh=self._fetch_balance,
+        )
+        self._last_balance: float | None = None
+        self._balance_fetched_ts = 0.0
+        # Pag-palit ng Paper/Live: ibang balance ang dapat ipakita
+        self._mode.currentIndexChanged.connect(
+            lambda _i: self._fetch_balance()
+        )
 
         note = QLabel(
             "API Key ID is stored in Windows Credential Manager. Large RSA "
@@ -303,9 +304,6 @@ class KalshiSettingsPage(QWidget):
         panel_col.setSpacing(10)
         panel_col.addWidget(title)
         panel_col.addLayout(form)
-        panel_col.addSpacing(4)
-        panel_col.addLayout(btn_row)
-        panel_col.addWidget(self._status)
         panel_col.addWidget(note)
 
         wrapper = QWidget()
@@ -320,6 +318,8 @@ class KalshiSettingsPage(QWidget):
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(8)
+        root.addWidget(self.header)
         root.addWidget(scroll)
 
     # ------------------------------------------------------------------ save
@@ -378,8 +378,99 @@ class KalshiSettingsPage(QWidget):
     # -------------------------------------------------- credential check
 
     def _set_status(self, text: str, color: str) -> None:
-        self._status.setText(text)
-        self._status.setStyleSheet(f"color: {color}")
+        self.header.set_status(text, color)
+
+    # ------------------------------------------------ balance + recommend
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        """Unang bukas ng page (o balik dito): i-fetch ang balance para
+        UNA itong makita bago mag-configure — iwas taya nang lampas sa
+        pondo."""
+        super().showEvent(event)
+        import time as _t
+        if _t.monotonic() - self._balance_fetched_ts > 60:
+            self._fetch_balance()
+
+    def _fetch_balance(self) -> None:
+        import time as _t
+        self._balance_fetched_ts = _t.monotonic()
+
+        # Paper mode: paper balance = starting balance + naipong PnL
+        if self._mode.currentIndex() == 0:
+            start = float(self._db.get_setting(
+                "paper_start_usd", DEFAULTS["paper_start_usd"]))
+            bal = start + self._db.total_pnl()
+            self._last_balance = bal
+            self.header.set_balance(bal, "Paper balance (simulated)")
+            return
+
+        key_id = secrets.get_secret(secrets.KEY_KALSHI_API_ID)
+        pem = secrets.get_secret(secrets.KEY_KALSHI_PEM)
+        if not pem:
+            pem = str(self._db.get_setting("pem_path", "")).strip() or None
+        if not key_id or not pem:
+            self.header.set_balance(
+                None, "Add API Key ID + RSA key below, then Save")
+            return
+        env = self._envs[self._env.currentIndex()][1]
+        self.header.set_balance(None, f"Fetching live balance… [{env}]")
+
+        async def _run() -> None:
+            from src.execution.kalshi_client import KalshiClient
+            client = None
+            try:
+                client = KalshiClient(env=env, key_id=key_id,
+                                      private_key_pem=pem)
+                bal = await client.get_balance()
+                self._last_balance = bal
+                self.header.set_balance(bal, f"Real USD on Kalshi [{env}]")
+            except Exception as e:
+                self.header.set_balance(None, f"Balance fetch failed: {e}")
+            finally:
+                if client is not None:
+                    await client.aclose()
+
+        try:
+            asyncio.create_task(_run())
+        except RuntimeError:
+            pass  # walang running event loop (hal. sa UI tests)
+
+    def _apply_recommended(self) -> None:
+        """Isang click: ligtas na testing values na pasok sa balance.
+
+        Risk ≈ 10% ng balance (min $2) — sapat para makakita ng totoong
+        fills nang hindi nalalagay sa alanganin ang buong pondo.
+        """
+        # Walang balance = hindi pa masasabi kung magkano ang ligtas.
+        # Mag-fetch muna kaysa mag-alok ng maling maliit na halaga.
+        if self._last_balance is None:
+            self._fetch_balance()
+            self._set_status(
+                "Fetching your balance first — click Apply Recommended "
+                "again in a moment so the risk can be sized to it.",
+                theme.AMBER,
+            )
+            return
+
+        rec = recommended_risk(self._last_balance, minimum=2.0)
+        self._risk.setValue(rec)
+        # Lahat ng liga ay i-scan — ang Minimum Market Volume na ang
+        # pumipili ng maganda; mas maraming liga = mas maraming pagkakataon
+        for cb in self._sport_cbs:
+            cb.setChecked(True)
+        self._entry.setValue(DEFAULTS["entry_price_cents"])
+        self._hedge_max.setValue(DEFAULTS["hedge_max_price"])
+        self._hedge_timeout.setValue(DEFAULTS["hedge_timeout_secs"])
+        self._min_volume.setValue(DEFAULTS["min_volume"])
+        self._min_close.setValue(DEFAULTS["min_close_mins"])
+        self._max_close.setValue(DEFAULTS["max_close_hours"])
+        self._set_status(
+            f"Recommended values applied — Risk ${rec:,.2f} (10% of your "
+            f"{self._last_balance:,.2f} USD balance), entry 49¢, "
+            f"hedge 51¢/90s, all {len(self._sport_cbs)} leagues on. "
+            "Click Save Settings to apply.",
+            theme.AMBER,
+        )
 
     def _validate_credentials(self) -> None:
         """Read-only check: GET /portfolio/balance gamit ang saved creds."""
@@ -408,6 +499,8 @@ class KalshiSettingsPage(QWidget):
                     f"Balance: {balance:,.2f} USD [{env}]",
                     theme.GREEN,
                 )
+                self._last_balance = balance
+                self.header.set_balance(balance, f"Real USD on Kalshi [{env}]")
                 self.liveBalanceChecked.emit(balance)
             except Exception as e:
                 self._set_status(
@@ -435,4 +528,5 @@ class KalshiSettingsPage(QWidget):
         self._min_close.setValue(DEFAULTS["min_close_mins"])
         self._max_close.setValue(DEFAULTS["max_close_hours"])
         self._paper_start.setValue(DEFAULTS["paper_start_usd"])
-        self._status.setText("Defaults restored — click Save Settings to apply")
+        self._set_status("Defaults restored — click Save Settings to apply",
+                         theme.MUTED)
