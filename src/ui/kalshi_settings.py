@@ -243,7 +243,9 @@ class KalshiSettingsPage(QWidget):
             sports_grid.addWidget(cb, i // 2, i % 2)  # 2 columns
         sports_wrap = QWidget()
         sports_wrap.setLayout(sports_grid)
-        sports_lab = add_field("Sports to Trade", sports_wrap)
+        # Transparent para mag-blend sa card (walang itim na kahon sa likod)
+        sports_wrap.setStyleSheet("background: transparent;")
+        add_field("Sports to Trade", sports_wrap)
         sports_hint = QLabel(
             "Pick the leagues to scan for 50/50 games. Leave all unchecked "
             "to auto-discover whatever is active."

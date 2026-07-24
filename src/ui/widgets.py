@@ -40,6 +40,10 @@ def panel_accent_qss(accent: str, accent_dim: str) -> str:
     QCheckBox::indicator:hover {{ border-color: {accent}; }}
     QCheckBox::indicator:checked {{ background: {accent}; border-color: {accent}; }}
     QTableWidget::item:selected {{ background: {accent_dim}; }}
+    QPushButton[chip="true"]:hover {{ border-color: {accent}; }}
+    QPushButton[chip="true"]:checked {{
+        background: {accent_dim}; border: 1px solid {accent}; color: {accent};
+    }}
     """
 
 

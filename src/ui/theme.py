@@ -137,6 +137,24 @@ QPushButton[navItem="true"][active="true"] {{
     border-bottom: 2px solid {ACCENT};
 }}
 
+/* ---- Selectable chips (toggle tags, e.g. Sports to Trade) ---- */
+QPushButton[chip="true"] {{
+    background: transparent;
+    border: 1px solid {BORDER};
+    border-radius: 14px;
+    padding: 6px 14px;
+    color: {MUTED};
+    font-size: 12px;
+    font-weight: 600;
+    text-align: center;
+}}
+QPushButton[chip="true"]:hover {{ border-color: {ACCENT}; color: {TEXT}; }}
+QPushButton[chip="true"]:checked {{
+    background: {ACCENT_DIM};
+    border: 1px solid {ACCENT};
+    color: {ACCENT_HOVER};
+}}
+
 QPushButton {{
     background: {BORDER};
     border: 1px solid #3d4b63;
