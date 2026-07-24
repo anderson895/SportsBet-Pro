@@ -13,10 +13,12 @@ from __future__ import annotations
 import asyncio
 
 import qtawesome as qta
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -33,6 +35,25 @@ from src.core import secrets
 from src.storage.db import ScopedDatabase
 from src.ui import theme
 from src.ui.widgets import Card
+
+# Friendly na sport name -> Kalshi series ticker. Ito ang ipinapakita bilang
+# checkboxes; hindi na kailangang alam ng user ang cryptic na ticker codes.
+SPORT_OPTIONS = [
+    ("Baseball — MLB", "KXMLBGAME"),
+    ("Basketball — NBA", "KXNBAGAME"),
+    ("Basketball — WNBA", "KXWNBAGAME"),
+    ("Basketball — College", "KXNCAABGAME"),
+    ("Football — NFL", "KXNFLGAME"),
+    ("Football — College", "KXNCAAFGAME"),
+    ("Hockey — NHL", "KXNHLGAME"),
+    ("Soccer — EPL", "KXEPLGAME"),
+    ("Soccer — Champions League", "KXUCLGAME"),
+    ("Soccer — La Liga", "KXLALIGAGAME"),
+    ("Soccer — Serie A", "KXSERIEAGAME"),
+    ("Soccer — Ligue 1", "KXLIGUE1GAME"),
+    ("Soccer — MLS", "KXMLSGAME"),
+    ("Soccer — Liga MX", "KXLIGAMXGAME"),
+]
 
 DEFAULTS = {
     "risk_usd": 100.0,
@@ -206,12 +227,30 @@ class KalshiSettingsPage(QWidget):
         )
         add_field("Skip markets closing later than", self._max_close)
 
-        self._series = QLineEdit()
-        self._series.setText(str(g("series_tickers", "")))
-        self._series.setPlaceholderText(
-            "auto-discover on first START (e.g. KXNBAGAME,KXNFLGAME)"
+        # Sports to trade — friendly na checkboxes (walang cryptic tickers)
+        saved_series = {t.strip() for t in
+                        str(g("series_tickers", "")).split(",") if t.strip()}
+        self._sport_cbs: list[QCheckBox] = []
+        sports_grid = QGridLayout()
+        sports_grid.setContentsMargins(0, 2, 0, 0)
+        sports_grid.setHorizontalSpacing(20)
+        sports_grid.setVerticalSpacing(6)
+        for i, (label, ticker) in enumerate(SPORT_OPTIONS):
+            cb = QCheckBox(label)
+            cb.setChecked(ticker in saved_series)
+            cb.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._sport_cbs.append(cb)
+            sports_grid.addWidget(cb, i // 2, i % 2)  # 2 columns
+        sports_wrap = QWidget()
+        sports_wrap.setLayout(sports_grid)
+        sports_lab = add_field("Sports to Trade", sports_wrap)
+        sports_hint = QLabel(
+            "Pick the leagues to scan for 50/50 games. Leave all unchecked "
+            "to auto-discover whatever is active."
         )
-        add_field("Sports Series Tickers (comma-separated)", self._series)
+        sports_hint.setProperty("muted", True)
+        sports_hint.setWordWrap(True)
+        form.addWidget(sports_hint)
 
         self._paper_start = _spin_f(
             float(g("paper_start_usd", DEFAULTS["paper_start_usd"])), "USD"
@@ -322,7 +361,9 @@ class KalshiSettingsPage(QWidget):
         self._db.set_setting("min_volume", self._min_volume.value())
         self._db.set_setting("min_close_mins", self._min_close.value())
         self._db.set_setting("max_close_hours", self._max_close.value())
-        self._db.set_setting("series_tickers", self._series.text().strip())
+        chosen = [ticker for (label, ticker), cb
+                  in zip(SPORT_OPTIONS, self._sport_cbs) if cb.isChecked()]
+        self._db.set_setting("series_tickers", ",".join(chosen))
         self._db.set_setting("paper_start_usd", self._paper_start.value())
 
         self._set_status("Settings saved ✓", theme.GREEN)

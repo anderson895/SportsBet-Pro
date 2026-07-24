@@ -29,6 +29,17 @@ def panel_accent_qss(accent: str, accent_dim: str) -> str:
         color: {theme.FAINT}; border-color: {accent_dim}; }}
     QLabel[pill="ok"] {{ background: {accent_dim}; color: {accent}; }}
     QLabel[pill="outline"] {{ color: {accent}; border: 1px solid {accent}; }}
+    /* Input focus + selection accents — per-exchange (indigo poly / mint kalshi) */
+    QComboBox:focus, QLineEdit:focus, QDoubleSpinBox:focus, QSpinBox:focus,
+    QPlainTextEdit:focus {{ border-color: {accent}; }}
+    QLineEdit {{ selection-background-color: {accent_dim}; }}
+    QComboBox QAbstractItemView::item:hover,
+    QComboBox QAbstractItemView::item:selected {{
+        background: {accent_dim}; color: {accent};
+    }}
+    QCheckBox::indicator:hover {{ border-color: {accent}; }}
+    QCheckBox::indicator:checked {{ background: {accent}; border-color: {accent}; }}
+    QTableWidget::item:selected {{ background: {accent_dim}; }}
     """
 
 
