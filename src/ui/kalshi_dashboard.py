@@ -329,16 +329,19 @@ class KalshiDashboard(QWidget):
         self._render_grid()
 
     def _render_grid(self) -> None:
-        # Linisin ang grid. Ang takeAt() ay nag-aalis lang sa LAYOUT — hindi
-        # nito binabago ang parent, at ang deleteLater() ay naghihintay pa ng
-        # event loop. Kaya kailangan ng setParent(None): agad itong nagtatago,
-        # kung hindi ay nananatiling nakikita ang lumang hint/cards sa ibabaw
-        # ng bago.
+        # Linisin ang grid. Ang takeAt() ay nag-aalis lang sa LAYOUT, at ang
+        # deleteLater() ay naghihintay pa ng event loop — kaya kailangan ng
+        # hide() para AGAD mawala, kung hindi ay nananatiling nakikita ang
+        # lumang hint/cards sa ibabaw ng bago.
+        #
+        # hide(), HINDI setParent(None): ang pag-set ng parent sa None ay
+        # ginagawang TOP-LEVEL WINDOW ang widget, at kumikislap ito bilang
+        # maliliit na kahon sa screen bago mabura.
         while self._grid.count():
             item = self._grid.takeAt(0)
             w = item.widget()
             if w is not None:
-                w.setParent(None)
+                w.hide()
                 w.deleteLater()
 
         games = self._games

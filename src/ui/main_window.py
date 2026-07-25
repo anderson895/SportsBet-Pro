@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.storage.db import Database, ScopedDatabase
-from src.ui import theme
+from src.ui import help_content, theme
 from src.ui.exchange_panel import ExchangePanel
 from src.ui.kalshi_dashboard import KalshiDashboard
 from src.ui.kalshi_settings import KalshiSettingsPage
@@ -60,16 +60,11 @@ class MainWindow(QMainWindow):
             market_text="BTC (Binance) → Polymarket",
             currency="USDC",
             risk_setting=("risk_usdc", 200.0),
-            about_title="Polymarket Bot",
-            about_body=(
-                f"SportsBet Pro v{APP_VERSION} — Polymarket panel\n\n"
-                "Strategy: Mean Reversion (\"Rubber Band\") on daily BTC Up/Down markets.\n"
-                "Data: Binance (read-only BTC price feed).\n\n"
-                "Paper mode simulates every trade with no real money.\n"
-                "Switch to Live mode in Settings to trade with real USDC on Polymarket."
-            ),
+            about_title=f"Help & Documentation  ·  v{APP_VERSION}",
+            about_body="",
             accent=theme.POLY_ACCENT,
             accent_dim=theme.POLY_ACCENT_DIM,
+            help_tag=help_content.POLYMARKET,
         )
 
         # ---- Kalshi panel -----------------------------------------------
@@ -84,19 +79,11 @@ class MainWindow(QMainWindow):
             market_text="Kalshi Sports 50/50",
             currency="USD",
             risk_setting=("risk_usd", 100.0),
-            about_title="Kalshi Bot",
-            about_body=(
-                f"SportsBet Pro v{APP_VERSION} — Kalshi panel\n\n"
-                "Strategy: Internal Straddle / Box Arbitrage on high-liquidity 50/50\n"
-                "sports markets — buy YES @49¢ + NO @49¢ as resting maker orders;\n"
-                "one side must settle at $1.00, locking ~1.1% per cycle after fees.\n"
-                "A Hedge Sentinel closes single-sided fills at ≤51¢ to avoid\n"
-                "directional sports risk.\n\n"
-                "Paper mode uses live public Kalshi market data with simulated fills.\n"
-                "Live mode needs your Kalshi API Key ID + RSA private key (Settings)."
-            ),
+            about_title=f"Help & Documentation  ·  v{APP_VERSION}",
+            about_body="",
             accent=theme.KALSHI_ACCENT,
             accent_dim=theme.KALSHI_ACCENT_DIM,
+            help_tag=help_content.KALSHI,
         )
 
         # ---- Poly-specific signal wiring (chart, stretch, atbp.) --------

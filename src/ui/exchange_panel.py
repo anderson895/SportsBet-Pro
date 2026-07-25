@@ -31,7 +31,8 @@ from PySide6.QtWidgets import (
 from src.storage.db import ScopedDatabase
 from src.ui import theme
 from src.ui.alert_banner import AlertBanner
-from src.ui.pages import AboutPage, LogsPage, StatsPage, TradesPage
+from src.ui.about_page import AboutPage
+from src.ui.pages import LogsPage, StatsPage, TradesPage
 from src.ui.widgets import panel_accent_qss
 
 
@@ -156,6 +157,7 @@ class ExchangePanel(QWidget):
         about_body: str,
         accent: str = theme.ACCENT,
         accent_dim: str = theme.ACCENT_DIM,
+        help_tag: str = "All",   # pre-selected na filter chip sa About
     ) -> None:
         super().__init__()
         self._engine = engine
@@ -184,7 +186,7 @@ class ExchangePanel(QWidget):
         self._stack = QStackedWidget()
         for page in (
             self.dash, self.settings, self.logs, self.trades, self.stats,
-            AboutPage(about_title, about_body),
+            AboutPage(about_title, about_body, default_tag=help_tag),
         ):
             self._stack.addWidget(page)
         self._stack.setCurrentIndex(0)

@@ -222,15 +222,5 @@ class StatsPage(QWidget):
         self._labels["Total PnL"].setStyleSheet(f"font-size: 15px; color: {color}")
 
 
-class AboutPage(QWidget):
-    def __init__(self, title_text: str, body_text: str) -> None:
-        super().__init__()
-        title = QLabel(title_text)
-        title.setProperty("h1", True)
-        body = QLabel(body_text)
-        body.setProperty("muted", True)
-        body.setWordWrap(True)
-        root = QVBoxLayout(self)
-        root.addWidget(title)
-        root.addWidget(body)
-        root.addStretch()
+# NB: ang AboutPage ay lumipat sa about_page.py — searchable na ito ngayon
+# at may buong dokumentasyon (tingnan ang help_content.py).

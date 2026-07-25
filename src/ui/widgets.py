@@ -156,8 +156,12 @@ class StatCard(Card):
         col.setSpacing(4)
         col.addWidget(self._title)
         col.addWidget(self._value)
-        if sub:
-            col.addWidget(self._sub)
+        # LAGING idinadagdag, itinatago lang kapag walang laman. Kung hindi
+        # ito idinagdag sa layout, mananatiling WALANG PARENT ang label —
+        # ibig sabihin isa itong top-level window, at ang set_sub() sa
+        # bandang huli ay magpapakita nito bilang kumikislap na kahon.
+        col.addWidget(self._sub)
+        self._sub.setVisible(bool(sub))
 
     def set_value(self, text: str, color: str | None = None) -> None:
         self._value.setText(text)
@@ -171,3 +175,4 @@ class StatCard(Card):
 
     def set_sub(self, text: str) -> None:
         self._sub.setText(text)
+        self._sub.setVisible(bool(text))
