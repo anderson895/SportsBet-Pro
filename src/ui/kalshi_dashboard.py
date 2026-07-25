@@ -1,9 +1,9 @@
 """Kalshi dashboard — Kalshi.com-inspired layout:
 
 - status cards (Internet / Kalshi / Bot / Balance)
-- "Featured Market" card na may LIVE two-line probability chart (YES mint,
-  NO rose) + malalaking outcome percentages, tulad ng kalshi.com
-- scanned sports markets table (may pill status)
+- "Featured Market" card: malalaking live outcome percentages + payout
+  odds kada team, carousel, at estado ng straddle
+- grid ng mga na-scan na sports market (ito ang kumukuha ng espasyo)
 - recent logs
 """
 from __future__ import annotations
@@ -30,7 +30,6 @@ from PySide6.QtWidgets import (
 from src.storage.db import ScopedDatabase
 from src.ui import theme
 from src.ui.kalshi_cards import GameCard, group_games
-from src.ui.kalshi_chart import KalshiChart
 from src.ui.pages import local_time
 from src.ui.widgets import Card, Pill, StatCard, StatusCard
 
@@ -127,8 +126,6 @@ class KalshiDashboard(QWidget):
         outcomes.addWidget(self._no_lbl)
         outcomes.addStretch()
 
-        self.chart = KalshiChart()
-
         self._strategy_label = QLabel("Strategy: idle (press START BOT)")
         self._strategy_label.setProperty("muted", True)
         self._strategy_label.setWordWrap(True)
@@ -137,14 +134,18 @@ class KalshiDashboard(QWidget):
         divider.setFrameShape(QFrame.Shape.HLine)
         divider.setStyleSheet(f"color: {theme.BORDER_SOFT};")
 
+        # Walang chart: walang historical candles ang Kalshi para sa mga
+        # market na ito, kaya live ticks lang ang maipapakita — halos
+        # blangko ito at nauubos lang ang espasyo. Ang live na porsyento +
+        # odds sa itaas ay parehong impormasyon, at napupunta na sa Live
+        # Sports Markets ang natirang taas.
         featured = Card()
         fc = QVBoxLayout(featured)
-        fc.setContentsMargins(18, 15, 18, 15)
-        fc.setSpacing(11)
+        fc.setContentsMargins(18, 14, 18, 14)
+        fc.setSpacing(10)
         fc.addLayout(head)
         fc.addLayout(outcomes)
         fc.addWidget(divider)
-        fc.addWidget(self.chart, stretch=1)
         fc.addWidget(self._strategy_label)
 
         # ---- Scanned markets — Kalshi-style game cards grid + search ----
@@ -158,15 +159,26 @@ class KalshiDashboard(QWidget):
         self._count_lbl = QLabel("")
         self._count_lbl.setProperty("muted", True)
         markets_head = QHBoxLayout()
+        # +14px sa kanan: ang panel right margin ay 2px lang (binawasan para
+        # ma-account ang 10px scrollbar sa GRID) — pero ang header row ay
+        # nasa labas ng scroll area, kaya kailangan nitong bawiin ang
+        # natitira para tumugma sa 16px na gilid ng mga card.
+        markets_head.setContentsMargins(0, 0, 14, 0)
         markets_head.addWidget(table_title)
         markets_head.addWidget(self._count_lbl)
         markets_head.addStretch()
         markets_head.addWidget(self._search)
 
         self._grid_host = QWidget()
+        # Transparent — kung hindi, mamamana nito ang ITIM na page background
+        # (QWidget { background: BG }) at lalabas na itim ang mga puwang sa
+        # pagitan ng cards sa loob ng mas mapusyaw na panel
+        self._grid_host.setStyleSheet("background: transparent;")
         self._grid = QGridLayout(self._grid_host)
-        self._grid.setContentsMargins(0, 0, 0, 0)
-        self._grid.setSpacing(12)
+        # Ang mga margin dito ay tumatakbo KASAMA ang panel margins sa ibaba —
+        # tingnan ang tala roon para sa kabuuang 16px sa bawat gilid.
+        self._grid.setContentsMargins(0, 6, 4, 6)
+        self._grid.setSpacing(14)
         self._grid.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         self._empty_hint = QLabel("Press START BOT to scan live sports "
@@ -178,11 +190,26 @@ class KalshiDashboard(QWidget):
         mkt_scroll.setWidgetResizable(True)
         mkt_scroll.setWidget(self._grid_host)
         mkt_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        # LAGING nakalaan ang espasyo ng scrollbar — kung hindi, lumilipat
+        # ang mga card ng 10px tuwing lalabas/mawawala ito, at nasisira ang
+        # pagkakapantay ng kaliwa/kanan. Transparent ang track kaya hindi
+        # ito nakikita kapag walang ma-scroll.
+        mkt_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOn
+        )
 
+        # PANTAY na 16px sa paligid ng card grid. Ang bawat gilid ay
+        # pinagsamang panel + grid margin — at ang 10px na scrollbar ay
+        # BINIBILANG sa kanan dahil nasa labas ito ng viewport:
+        #   kaliwa : 16 (panel) + 0 (grid)             = 16
+        #   kanan  :  4 (grid) + 10 (scrollbar) + 2    = 16
+        #   itaas  : 10 (spacing) + 6 (grid)           = 16  mula sa header
+        #   ibaba  : 16 (panel)                        = 16
         markets_panel = Card()
         markets_panel.setMinimumHeight(280)
         markets_col = QVBoxLayout(markets_panel)
-        markets_col.setContentsMargins(16, 12, 16, 12)
+        markets_col.setContentsMargins(16, 14, 2, 16)
+        markets_col.setSpacing(10)
         markets_col.addLayout(markets_head)
         markets_col.addWidget(mkt_scroll, stretch=1)
 
@@ -210,12 +237,12 @@ class KalshiDashboard(QWidget):
         logs_col.addWidget(self._log_list, stretch=1)
 
         # ---- Layout ------------------------------------------------------
-        # Hatiin ang vertical space: featured chart ~55%, markets ~45% —
-        # para hindi ma-clip/masikip ang game cards
+        # Ang featured card ay kasing-taas lang ng laman nito (walang chart);
+        # LAHAT ng natitirang taas ay napupunta sa game cards
         left_col = QVBoxLayout()
         left_col.setSpacing(12)
-        left_col.addWidget(featured, stretch=11)
-        left_col.addWidget(markets_panel, stretch=9)
+        left_col.addWidget(featured)
+        left_col.addWidget(markets_panel, stretch=1)
 
         body_row = QHBoxLayout()
         body_row.setSpacing(12)
@@ -243,16 +270,20 @@ class KalshiDashboard(QWidget):
         if ticker != self._chart_ticker:
             self._chart_ticker = ticker
             self._market_title.setText(title or ticker)
-            self.chart.reset()
-        self.chart.add_tick(yes_pct, no_pct)
         # Team names + payout odds (kalshi-style) kung kilala ang game;
         # else fallback sa generic YES/NO
         game = next((g for g in self._games if g["ticker"] == ticker), None)
-        if game and len(game.get("teams", [])) >= 2:
-            t0, t1 = game["teams"][0][0], game["teams"][1][0]
-            self._yes_lbl.setText(f"{t0}  {yes_pct:.0f}%  ·  "
+        teams = game.get("teams", []) if game else []
+        if len(teams) >= 2:
+            # Ang market na ito ay BINARY: "panalo ba si X?" Sa 2-way na
+            # laro, ang NO = ang kalaban. Pero sa 3-way (soccer, may
+            # TABLA), ang NO = "lahat maliban kay X" — mali kung
+            # papangalanan ito ng isang kalaban lang.
+            yes_name = teams[0][0]
+            no_name = teams[1][0] if len(teams) == 2 else f"Not {yes_name}"
+            self._yes_lbl.setText(f"{yes_name}  {yes_pct:.0f}%  ·  "
                                   f"{self._payout(yes_pct)}")
-            self._no_lbl.setText(f"{t1}  {no_pct:.0f}%  ·  "
+            self._no_lbl.setText(f"{no_name}  {no_pct:.0f}%  ·  "
                                  f"{self._payout(no_pct)}")
         else:
             self._yes_lbl.setText(f"YES {yes_pct:.0f}%")
@@ -293,11 +324,16 @@ class KalshiDashboard(QWidget):
         self._render_grid()
 
     def _render_grid(self) -> None:
-        # Linisin ang grid
+        # Linisin ang grid. Ang takeAt() ay nag-aalis lang sa LAYOUT — hindi
+        # nito binabago ang parent, at ang deleteLater() ay naghihintay pa ng
+        # event loop. Kaya kailangan ng setParent(None): agad itong nagtatago,
+        # kung hindi ay nananatiling nakikita ang lumang hint/cards sa ibabaw
+        # ng bago.
         while self._grid.count():
             item = self._grid.takeAt(0)
             w = item.widget()
             if w is not None:
+                w.setParent(None)
                 w.deleteLater()
 
         games = self._games
@@ -366,10 +402,9 @@ class KalshiDashboard(QWidget):
         self._user_selected = True
         g = self._games[idx]
         self._counter_lbl.setText(f"{idx + 1} of {len(self._games)}")
-        self.chart.reset()
         self._chart_ticker = g["ticker"]
         self._market_title.setText(g.get("title", g["matchup"]))
-        # Ipa-poll sa engine ang piniling market para gumalaw ang chart
+        # Ipa-poll sa engine ang piniling market para mag-update ang odds
         self.focusRequested.emit(g["ticker"], g.get("title", g["matchup"]))
 
     def set_straddle_status(self, text: str) -> None:

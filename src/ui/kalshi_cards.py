@@ -14,7 +14,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout
 from src.ui import theme
 from src.ui.widgets import Card, Pill
 
-_TEAM_DOTS = ("#f75d6b", "#4c8dff")  # red / blue tulad ng kalshi.com
+_TEAM_DOTS = ("#f75d6b", "#4c8dff", "#b0b7c3")  # red / blue / grey (tabla)
 
 # League -> (sport icon, display label). qtawesome (Font Awesome 6) —
 # offline, walang network fetch na kailangan.
@@ -112,11 +112,16 @@ class GameCard(Card):
         title.setWordWrap(True)
         col.addWidget(title)
 
-        # Team rows: sport-icon "logo" + name + green-outlined % pill
-        for i, (team, pct) in enumerate(game["teams"][:2]):
+        # Team rows: sport-icon "logo" + name + green-outlined % pill.
+        # IPAKITA ANG LAHAT ng outcome — ang soccer ay 3-way (panalo /
+        # TABLA / panalo). Kung 2 lang ang ipapakita, mukhang mali ang
+        # porsyento dahil hindi umaabot sa 100%.
+        for i, (team, pct) in enumerate(game["teams"]):
             logo = QLabel()
             logo.setPixmap(
-                qta.icon(icon_name, color=_TEAM_DOTS[i % 2]).pixmap(20, 20))
+                qta.icon(icon_name,
+                         color=_TEAM_DOTS[min(i, len(_TEAM_DOTS) - 1)]
+                         ).pixmap(20, 20))
             name = QLabel(team)
             name.setStyleSheet("font-size: 14px; font-weight: 600")
             pill = Pill(f"{pct:.0f}%", "outline")

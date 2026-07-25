@@ -75,6 +75,12 @@ class TradesPage(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(
+            QTableWidget.SelectionBehavior.SelectRows
+        )
+        self.table.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.table.cellDoubleClicked.connect(self._open_details)
+        self._currency = currency
 
         title = QLabel("Trades")
         title.setProperty("accent", True)
@@ -99,11 +105,24 @@ class TradesPage(QWidget):
         self.status = QLabel("")
         self.status.setProperty("muted", True)
 
+        hint = QLabel("Double-click a row to see the full trade details.")
+        hint.setProperty("muted", True)
+
         root = QVBoxLayout(self)
         root.addLayout(head)
         root.addWidget(self.table, stretch=1)
+        root.addWidget(hint)
         root.addWidget(self.status)
         self.reload()
+
+    def _open_details(self, row: int, _col: int) -> None:
+        item = self.table.item(row, 1)   # Market column
+        if item is None:
+            return
+        # Naka-import dito para maiwasan ang circular import (ang
+        # trade_details ay gumagamit ng mga helper mula sa module na ito)
+        from src.ui.trade_details import TradeDetailDialog
+        TradeDetailDialog(self._db, item.text(), self._currency, self).exec()
 
     def set_status(self, text: str, color: str = theme.MUTED) -> None:
         self.status.setText(text)
