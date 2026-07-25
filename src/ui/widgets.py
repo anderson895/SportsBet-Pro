@@ -47,6 +47,23 @@ def panel_accent_qss(accent: str, accent_dim: str) -> str:
     """
 
 
+def run_async(coro) -> bool:
+    """Patakbuhin ang coroutine sa qasync loop; True kung nag-schedule.
+
+    Kapag walang running loop (hal. sa UI tests), isinasara ang coroutine —
+    kung hindi ay maglalabas ng "coroutine was never awaited" na warning at
+    matatagpuan ang tunay na warning sa dami ng ingay.
+    """
+    import asyncio
+
+    try:
+        asyncio.create_task(coro)
+        return True
+    except RuntimeError:
+        coro.close()
+        return False
+
+
 class WheelBlocker(QObject):
     """Hinaharangan ang mouse-wheel sa spinboxes/dropdowns.
 

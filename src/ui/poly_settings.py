@@ -29,7 +29,7 @@ from src.core import secrets
 from src.storage.db import ScopedDatabase
 from src.ui import theme
 from src.ui.settings_header import SettingsHeader, recommended_risk
-from src.ui.widgets import Card
+from src.ui.widgets import Card, run_async
 
 DEFAULTS = {
     "risk_usdc": 10.0,  # maliit na default — ligtas sa unang subok
@@ -243,7 +243,13 @@ class PolySettingsPage(QWidget):
                 w.setVisible(not paper)
 
         self._mode.currentIndexChanged.connect(_toggle_mode_fields)
-        _toggle_mode_fields(self._mode.currentIndex())
+        # HUWAG tawagin dito! Ang `form` ay standalone pa na QVBoxLayout, at
+        # ang layout na walang parent widget ay HINDI pa nagre-reparent ng
+        # mga widget nito. Ang setVisible(True) sa parentless na widget ay
+        # nagpapakita nito bilang TOP-LEVEL WINDOW — kaya kumikislap ang
+        # maliliit na kahon sa pagbukas ng app. Tinatawag sa dulo ng
+        # __init__, pagkatapos ma-install ang form sa panel.
+        self._toggle_mode_fields = _toggle_mode_fields
 
         # --- Sticky header (balance + Save/Reset/Recommended) -------------
         # Nasa LABAS ng scroll area para laging kita ang Save — hindi na
@@ -294,6 +300,10 @@ class PolySettingsPage(QWidget):
         root.setSpacing(8)
         root.addWidget(self.header)
         root.addWidget(scroll)
+
+        # Ngayon lang — naka-parent na ang mga field sa panel, kaya ang
+        # setVisible() ay hindi na gagawa ng stray na window
+        self._toggle_mode_fields(self._mode.currentIndex())
 
     # ------------------------------------------------------------------ save
 
@@ -383,10 +393,7 @@ class PolySettingsPage(QWidget):
             except Exception as e:
                 self.header.set_balance(None, f"Balance fetch failed: {e}")
 
-        try:
-            asyncio.create_task(_run())
-        except RuntimeError:
-            pass  # walang running event loop (hal. sa UI tests)
+        run_async(_run())   # no-op kung walang loop (hal. sa UI tests)
 
     def _apply_recommended(self) -> None:
         """Isang click: ligtas na testing values na pasok sa balance.
@@ -481,10 +488,7 @@ class PolySettingsPage(QWidget):
             "Settings saved ✓ — verifying Polymarket credentials…",
             theme.AMBER,
         )
-        try:
-            asyncio.create_task(_run())
-        except RuntimeError:
-            pass  # walang running event loop (hal. sa UI tests)
+        run_async(_run())   # no-op kung walang loop (hal. sa UI tests)
 
     def _reset(self) -> None:
         # I-restore lang ang STRATEGY VALUES sa defaults — HINDI ginagalaw

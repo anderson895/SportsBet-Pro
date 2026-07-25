@@ -33,7 +33,7 @@ from src.ui import theme
 from src.ui.alert_banner import AlertBanner
 from src.ui.about_page import AboutPage
 from src.ui.pages import LogsPage, StatsPage, TradesPage
-from src.ui.widgets import panel_accent_qss
+from src.ui.widgets import panel_accent_qss, run_async
 
 
 class BottomBar(QFrame):
@@ -283,10 +283,7 @@ class ExchangePanel(QWidget):
 
         self.trades.set_status("Fetching fill history from the exchange…",
                                theme.AMBER)
-        try:
-            asyncio.create_task(_run())
-        except RuntimeError:
-            pass  # walang running event loop (hal. sa UI tests)
+        run_async(_run())   # no-op kung walang loop (hal. sa UI tests)
 
     def _tick_uptime(self) -> None:
         self._uptime_secs += 1
