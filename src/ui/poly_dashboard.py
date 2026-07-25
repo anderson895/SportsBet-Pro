@@ -23,6 +23,7 @@ from PySide6.QtGui import QColor
 from src.storage.db import ScopedDatabase
 from src.ui import theme
 from src.ui.chart import PriceChart
+from src.ui.pages import local_time
 from src.ui.widgets import Card, StatCard, StatusCard
 
 DEFAULT_PAPER_START = 1000.0
@@ -293,8 +294,10 @@ class PolyDashboard(QWidget):
     # ---------------------------------------------------------------- helpers
 
     def _load_recent_logs(self) -> None:
+        # local_time(): UTC ang naka-imbak, pero LOCAL ang mga live entry
         for row in self._db.recent_logs(limit=50):
-            self._insert_log_item(row["ts"][11:19], row["level"], row["message"])
+            self._insert_log_item(local_time(row["ts"]), row["level"],
+                                  row["message"])
 
     def _insert_log_item(
         self, ts: str, level: str, message: str, prepend: bool = False

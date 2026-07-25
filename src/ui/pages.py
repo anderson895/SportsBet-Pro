@@ -39,6 +39,27 @@ STATUS_COLORS = {
     "FILLED": theme.GREEN,
     "CANCELLED": theme.MUTED,
 }
+# Napalitan na ng totoong exchange fills — nasa DB pa para sa audit pero
+# hindi na ipinapakita, kung hindi ay doble ang parehong straddle
+HIDDEN_STATUSES = {"SUPERSEDED"}
+
+
+def local_time(ts: str) -> str:
+    """ISO timestamp -> HH:MM:SS sa LOCAL time ng user.
+
+    Ang mga ts ay naka-UTC (galing sa app o sa Kalshi) at may iba-ibang
+    hugis: "…+00:00" mula sa atin, "…Z" na may microseconds mula sa
+    Kalshi. Kapag hindi ma-parse, ibabalik ang hilaw na hiwa kaysa
+    magkamali ng oras.
+    """
+    raw = (ts or "").strip()
+    try:
+        parsed = dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return raw[11:19]
+    if parsed.tzinfo is None:            # walang zone = UTC ang assume
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.astimezone().strftime("%H:%M:%S")
 
 
 class TradesPage(QWidget):
@@ -91,12 +112,14 @@ class TradesPage(QWidget):
     def reload(self) -> None:
         self.table.setRowCount(0)
         for row in self._db.recent_trades(limit=200):
+            status = row["status"] or ""
+            if status in HIDDEN_STATUSES:
+                continue
             r = self.table.rowCount()
             self.table.insertRow(r)
             pnl = row["pnl"]
-            status = row["status"] or ""
             values = [
-                row["ts"][11:19], row["market"], row["side"], row["action"],
+                local_time(row["ts"]), row["market"], row["side"], row["action"],
                 f"{row['price']:.2f}", f"{row['size']:.2f}",
                 STATUS_LABELS.get(status, status),
                 "" if pnl is None else f"{pnl:+.2f}",
@@ -127,8 +150,10 @@ class LogsPage(QWidget):
         root.addWidget(title)
         root.addWidget(self.table, stretch=1)
 
+        # local_time(): ang mga naka-imbak na ts ay UTC, pero LOCAL ang
+        # gamit ng add_log() sa mga live entry — dapat pareho ang basehan
         for row in self._db.recent_logs(limit=500):
-            self._add_row(row["ts"][11:19], row["level"], row["message"])
+            self._add_row(local_time(row["ts"]), row["level"], row["message"])
 
     def add_log(self, level: str, message: str) -> None:
         self._add_row(dt.datetime.now().strftime("%H:%M:%S"), level, message, prepend=True)

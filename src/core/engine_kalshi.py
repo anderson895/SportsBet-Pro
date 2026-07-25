@@ -702,11 +702,23 @@ class KalshiEngine(QObject):
         client, owned = await self._authed_client()
         try:
             fills = await client.get_fills(limit=200)
+            positions = await client.get_positions()
         finally:
             if owned:
                 await client.aclose()
         imported = 0
+        # (market, side) na may totoong fills — para mapalitan ang lokal na
+        # placement rows at hindi madoble ang parehong straddle
+        filled_keys: set[tuple[str, str]] = set()
+
         for f in fills:
+            ticker = str(f.get("ticker") or f.get("market_ticker") or "")
+            # Ang outcome_side ang nagsasabi kung ANONG kontrata ang
+            # napunta sa atin (yes/no) — iyon ang totoong side natin.
+            outcome = str(f.get("outcome_side") or f.get("side") or "").lower()
+            side = outcome.upper() or "?"
+            filled_keys.add((ticker, side))
+
             fill_id = str(f.get("fill_id") or f.get("trade_id") or "")
             if not fill_id:
                 continue
@@ -714,9 +726,6 @@ class KalshiEngine(QObject):
             if self._db.has_trade_meta(meta):
                 continue
 
-            # Ang outcome_side ang nagsasabi kung ANONG kontrata ang
-            # napunta sa atin (yes/no) — iyon ang totoong side natin.
-            outcome = str(f.get("outcome_side") or f.get("side") or "").lower()
             price_key = ("yes_price_dollars" if outcome == "yes"
                          else "no_price_dollars")
             price = float(f.get(price_key) or 0.0)
@@ -724,8 +733,8 @@ class KalshiEngine(QObject):
             ts_raw = str(f.get("created_time") or "")
 
             self._db.add_trade(
-                market=str(f.get("ticker") or f.get("market_ticker") or ""),
-                side=outcome.upper() or "?",
+                market=ticker,
+                side=side,
                 action="BUY",
                 price=price,
                 size=count * price,
@@ -735,15 +744,67 @@ class KalshiEngine(QObject):
             )
             imported += 1
 
-        if imported:
+        # Ang exchange ang ground truth: itago ang mga "RESTING" placement
+        # row na napalitan na ng totoong fills
+        superseded = 0
+        for ticker, side in filled_keys:
+            superseded += self._db.supersede_open_trades(ticker, side)
+
+        settled = self._import_realized_pnl(positions)
+
+        if imported or superseded or settled:
             self.tradeExecuted.emit()
-            self.log("INFO", f"Synced {imported} new fill(s) from Kalshi "
-                             f"({len(fills)} in history)")
+            bits = [f"Synced {imported} new fill(s) from Kalshi "
+                    f"({len(fills)} in history)"]
+            if superseded:
+                bits.append(f"replaced {superseded} placeholder row(s)")
+            if settled:
+                bits.append(f"recorded PnL for {settled} closed market(s)")
+            self.log("INFO", " — ".join(bits))
         else:
             self.log("INFO", f"Already up to date — {len(fills)} fill(s) "
                              "in Kalshi history, nothing new")
         await self._refresh_balance()
         return imported, len(fills)
+
+    def _import_realized_pnl(self, positions: list[dict]) -> int:
+        """Magtala ng SETTLE row kada TAPOS NANG market na may kita/lugi.
+
+        Ang fill history ay nagsasabi lang ng BINILI natin — ang kita ay
+        nasa positions (`realized_pnl_dollars`). Kung hindi ito kukunin,
+        $0.00 ang ipapakita ng Statistics kahit kumita ang bot (nangyayari
+        ito kapag na-restart ang app bago matapos ang cycle).
+
+        Net PnL = realized − fees. Ini-update kung nagbago ang halaga
+        kaysa magdagdag ng dobleng row.
+        """
+        recorded = 0
+        for pos in positions:
+            ticker = str(pos.get("ticker") or "")
+            if not ticker:
+                continue
+            # position != 0 = bukas pa; hintayin munang magsara
+            if _dollars(pos, "position_fp") != 0:
+                continue
+            realized = _dollars(pos, "realized_pnl_dollars")
+            fees = _dollars(pos, "fees_paid_dollars")
+            if realized == 0 and fees == 0:
+                continue
+            net = round(realized - fees, 4)
+            traded = _dollars(pos, "total_traded_dollars")
+            meta = f"kalshi_settle:{ticker}"
+
+            if self._db.has_trade_meta(meta):
+                # Baka nadagdagan ang position — panatilihing tumpak
+                self._db.set_trade_pnl_by_meta(meta, net, traded)
+                continue
+            self._db.add_trade(
+                market=ticker, side="PAIR", action="SETTLE",
+                price=0.0, size=traded, status="FILLED", pnl=net, meta=meta,
+                ts=str(pos.get("last_updated_ts") or "") or None,
+            )
+            recorded += 1
+        return recorded
 
     # ---------------------------------------------------------- persistence
 
@@ -807,6 +868,18 @@ def _money_cents(m: dict, dollars_key: str, cents_key: str) -> int:
     if raw not in (None, ""):
         return int(round(float(raw) * 100))
     return int(m.get(cents_key) or 0)
+
+
+def _dollars(row: dict, key: str) -> float:
+    """Fixed-point na dollar/count STRING ("0.560000", "5.00") -> float.
+    Ganito ang ibinabalik ng portfolio endpoints ng Kalshi."""
+    raw = row.get(key)
+    if raw in (None, ""):
+        return 0.0
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _to_candidate(m: dict) -> Optional[MarketCandidate]:

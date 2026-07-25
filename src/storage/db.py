@@ -114,6 +114,42 @@ class Database:
         self._conn.commit()
         return int(cur.lastrowid)
 
+    def set_trade_pnl_by_meta(
+        self, exchange: str, meta: str, pnl: float, size: float
+    ) -> bool:
+        """I-update ang PnL/size ng row na may ganitong meta. True kung
+        may naapektuhan.
+
+        Kailangan ito dahil puwedeng magbago ang realized PnL ng isang
+        market (dagdag na fills) matapos nating maitala — mas tama ang
+        i-update kaysa magdagdag ng pangalawang row.
+        """
+        cur = self._conn.execute(
+            "UPDATE trades SET pnl = ?, size = ? WHERE exchange = ?"
+            " AND meta = ?",
+            (pnl, size, exchange, meta),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def supersede_open_trades(
+        self, exchange: str, market: str, side: str
+    ) -> int:
+        """Markahan ang naka-OPEN na placement rows bilang SUPERSEDED.
+
+        Kapag na-import na ang TOTOONG fills mula sa exchange, ang lumang
+        "order placed, resting" na row ay doble na — mas tumpak ang datos
+        ng exchange. Hindi ito dinedelete (nasa DB pa rin para sa audit),
+        itinatago lang sa Trades table.
+        """
+        cur = self._conn.execute(
+            "UPDATE trades SET status = 'SUPERSEDED' WHERE exchange = ?"
+            " AND market = ? AND side = ? AND status = 'OPEN'",
+            (exchange, market, side),
+        )
+        self._conn.commit()
+        return int(cur.rowcount)
+
     def has_trade_meta(self, exchange: str, meta: str) -> bool:
         """May naitala na bang trade na may ganitong meta (hal. fill_id)?
 
@@ -219,6 +255,16 @@ class ScopedDatabase:
 
     def has_trade_meta(self, meta: str) -> bool:
         return self._db.has_trade_meta(self.exchange, meta)
+
+    def supersede_open_trades(self, market: str, side: str) -> int:
+        return self._db.supersede_open_trades(self.exchange, market, side)
+
+    def set_trade_pnl_by_meta(
+        self, meta: str, pnl: float, size: float
+    ) -> bool:
+        return self._db.set_trade_pnl_by_meta(
+            self.exchange, meta, pnl, size
+        )
 
     def recent_trades(self, limit: int = 100) -> list[sqlite3.Row]:
         return self._db.recent_trades(self.exchange, limit)

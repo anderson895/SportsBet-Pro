@@ -31,6 +31,7 @@ from src.storage.db import ScopedDatabase
 from src.ui import theme
 from src.ui.kalshi_cards import GameCard, group_games
 from src.ui.kalshi_chart import KalshiChart
+from src.ui.pages import local_time
 from src.ui.widgets import Card, Pill, StatCard, StatusCard
 
 GRID_COLS = 2  # ilang game card kada row
@@ -453,8 +454,9 @@ class KalshiDashboard(QWidget):
     # ---------------------------------------------------------------- helpers
 
     def _load_recent_logs(self) -> None:
+        # local_time(): UTC ang naka-imbak, pero LOCAL ang mga live entry
         for row in self._db.recent_logs(limit=50):
-            self._insert_log_item(row["ts"][11:19], row["level"],
+            self._insert_log_item(local_time(row["ts"]), row["level"],
                                   row["message"])
 
     def _insert_log_item(
