@@ -84,6 +84,10 @@ class GameCard(Card):
         super().__init__()
         self._game = game
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        # Pinapagana ang QSS :hover para sa QFrame (kailangan ng WA_Hover —
+        # ang mga button lang ang awtomatikong nakakakuha ng hover events)
+        self.setProperty("gameCard", True)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         col = QVBoxLayout(self)
         col.setContentsMargins(16, 14, 16, 14)
         col.setSpacing(10)
@@ -133,16 +137,33 @@ class GameCard(Card):
             row.addWidget(pill)
             col.addLayout(row)
 
-        # Footer: volume + "view details" hint
-        foot = QHBoxLayout()
+        # Footer: volume lang — ang pagka-clickable ay ipinapahiwatig ng
+        # hover state (tingnan ang QFrame[gameCard] sa theme.py) at ng
+        # pointing-hand cursor, hindi ng dagdag na text
         vol = QLabel(f"${game['vol']:,} vol")
         vol.setStyleSheet(f"color: {theme.MUTED}; font-size: 12px")
-        hint = QLabel("View details ›")
-        hint.setStyleSheet(f"color: {theme.FAINT}; font-size: 11px")
-        foot.addWidget(vol)
-        foot.addStretch()
-        foot.addWidget(hint)
-        col.addLayout(foot)
+        col.addWidget(vol)
+
+    def _set_hovered(self, on: bool) -> None:
+        """Itakda ang `hovered` property at i-repolish para tumalab ang QSS.
+
+        Kailangan ng manu-manong pag-toggle: ang QSS `:hover` sa QFrame ay
+        hindi maaasahan (mga button lang ang laging nakakakuha ng hover
+        state), kaya dynamic property ang gamit.
+        """
+        if self.property("cardHover") == on:
+            return
+        self.setProperty("cardHover", on)
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def enterEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        self._set_hovered(True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        self._set_hovered(False)
+        super().leaveEvent(event)
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt naming)
         self.clicked.emit(self._game)

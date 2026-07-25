@@ -24,6 +24,7 @@ from src.ui import theme
 from src.ui.exchange_panel import ExchangePanel
 from src.ui.kalshi_dashboard import KalshiDashboard
 from src.ui.kalshi_settings import KalshiSettingsPage
+from src.ui.loading_overlay import LoadingOverlay
 from src.ui.poly_dashboard import PolyDashboard
 from src.ui.poly_settings import PolySettingsPage
 
@@ -213,6 +214,39 @@ class MainWindow(QMainWindow):
         self._switch(start_tab)
         self._select_page(0)
         self._refresh_poly_labels()
+
+        # ---- Startup gate: huwag ipagamit hangga't hindi pa handa ---------
+        self._loading = LoadingOverlay(
+            [
+                ("internet", "Checking internet connection"),
+                ("binance", "Connecting to Binance price feed"),
+                ("polymarket", "Connecting to Polymarket"),
+                ("kalshi", "Connecting to Kalshi"),
+                ("markets", "Loading live sports markets"),
+            ],
+            parent=container,
+        )
+        # Tinatapos ng connection monitor at ng unang market scan ang mga
+        # hakbang; may sariling timeout ang overlay kung may hindi tumugon.
+        poly_engine.connectionChanged.connect(self._on_startup_connection)
+        kalshi_engine.marketsScanned.connect(self._on_startup_markets)
+
+    # --------------------------------------------------------- startup gate
+    # (sinusundan mismo ng overlay ang sukat ng parent — tingnan ang
+    #  LoadingOverlay.eventFilter)
+
+    def _on_startup_connection(self, name: str, _up: bool) -> None:
+        """Tapos na ang isang connection check — up man o down.
+
+        Sinusukat natin ang "nalaman na natin ang estado", hindi ang
+        "konektado" — kung hindi, mananatiling naka-lock ang app kapag
+        offline ang isang service.
+        """
+        self._loading.mark_done(name)
+
+    def _on_startup_markets(self, rows: list) -> None:
+        # Kahit walang laman: nakausap na natin ang Kalshi, tapos na ang scan
+        self._loading.mark_done("markets")
 
     @staticmethod
     def _exchange_accent(index: int) -> str:

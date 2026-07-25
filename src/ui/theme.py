@@ -62,6 +62,15 @@ QFrame[card="true"] {{
     border: 1px solid {BORDER_SOFT};
     border-radius: 12px;
 }}
+/* Clickable game cards: minimal na hover — bahagyang lumiliwanag ang
+   background at border. Ito ang senyales na napi-pindot ang card (kasama
+   ang pointing-hand cursor), kaya wala nang "View details" na text.
+   Dynamic property ang gamit (hindi :hover) dahil ang QSS :hover sa
+   QFrame ay hindi maaasahan — itinatakda ng GameCard.enterEvent(). */
+QFrame[cardHover="true"] {{
+    background: {CARD_HOVER};
+    border-color: {BORDER};
+}}
 
 /* ---- Status pill badges ---- */
 QLabel[pill="ok"], QLabel[pill="info"], QLabel[pill="warn"],

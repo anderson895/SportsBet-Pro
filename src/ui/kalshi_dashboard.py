@@ -172,8 +172,13 @@ class KalshiDashboard(QWidget):
         self._grid_host = QWidget()
         # Transparent — kung hindi, mamamana nito ang ITIM na page background
         # (QWidget { background: BG }) at lalabas na itim ang mga puwang sa
-        # pagitan ng cards sa loob ng mas mapusyaw na panel
-        self._grid_host.setStyleSheet("background: transparent;")
+        # pagitan ng cards sa loob ng mas mapusyaw na panel.
+        # MAHALAGA: kailangang naka-scope sa #objectName. Ang walang-selector
+        # na rule (`background: transparent`) ay kumakalat sa LAHAT ng anak,
+        # kaya nawawala ang sariling background ng mga GameCard at hindi na
+        # tumatalab ang hover.
+        self._grid_host.setObjectName("gridHost")
+        self._grid_host.setStyleSheet("#gridHost { background: transparent; }")
         self._grid = QGridLayout(self._grid_host)
         # Ang mga margin dito ay tumatakbo KASAMA ang panel margins sa ibaba —
         # tingnan ang tala roon para sa kabuuang 16px sa bawat gilid.
