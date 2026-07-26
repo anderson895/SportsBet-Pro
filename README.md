@@ -11,38 +11,39 @@ Both can run at the same time.
 
 ---
 
-## 🆕 What's New in v1.1.0
+## 🆕 What's New in v1.3.4
 
-The Kalshi panel was reworked into a **Kalshi.com-style market view**:
+The v1.3.x releases focused on the Kalshi live path, correctness, and polish:
 
-- **Live game cards** — markets grouped by matchup, showing team names,
-  sport icon "logos", win %, and volume (green-outlined pills like kalshi.com);
-  scrollable grid, up to 60 rendered
-- **Featured market carousel** — page through candidates with `‹ N of M ›`,
-  **or click any card** to focus its live probability chart. Your selection is
-  respected (the auto-scanner won't override it)
-- **Search** — a search box filters live sports markets by **team or matchup**
-  across the *entire* scanned set (not just what's on screen); shows
-  `(60 of N — refine search)` when results exceed the display cap
-- **Team odds + payout** in the featured header — e.g.
-  `Washington 44% · 2.27x   Colorado 56% · 1.79x`
-- **More sports** — auto-discovers up to **14 sports series** (baseball,
-  basketball, WNBA/NCAAB, football, hockey, and soccer: EPL / UCL / La Liga /
-  Serie A / Ligue 1 / MLS / Liga MX) instead of just baseball
-- **Smoother chart** — antialiased two-line probability chart with a minimum
-  window width (no more collapsed axis on a fresh selection) and an instant
-  first data point on focus/navigation (polls every 3s)
-- **Always-on market feed** — cards + chart are live even while **STOPPED**
-  (START/STOP only gates trading)
-- **Full strategy documentation** added to this README (see below)
+- **Wider default scan filters** (v1.3.4) — a higher fill rate without touching
+  the **49¢ entry** that preserves the box-arb edge: min volume **3000**, skip
+  markets closing sooner than **30 min** / later than **24 h**
+- **Correct Polymarket trade details** (v1.3.3) — the trade drill-down now shows
+  a **directional** summary (side UP/DOWN, avg entry, cost, net PnL) instead of
+  the Kalshi YES/NO straddle template
+- **Windows taskbar icon** (v1.3.2) — an explicit AppUserModelID so the app icon
+  shows on the taskbar
+- **Orphaned-order cleanup on startup** (v1.3.1) — if the app restarts while a
+  live straddle is resting, leftover exchange orders are reconciled and
+  cancelled on the next START (no untracked real-money exposure)
+- **Realized PnL from settlements** (v1.3.0) — Kalshi settlement history is
+  imported so closed straddles show their true profit/loss in Trades and
+  Statistics; plus a live-market loading state, quieter sync logs, and
+  **date + 12-hour AM/PM** trade timestamps
+
+Earlier, **v1.1.0** reworked the Kalshi panel into a **Kalshi.com-style market
+view**: live game cards grouped by matchup (team names, sport icons, win %,
+volume), a featured-market carousel (`‹ N of M ›` or click any card), team +
+matchup search across the whole scanned set, up to **14 sports series**, and an
+always-on market feed that stays live even while **STOPPED**.
 
 > **Scope note:** the Kalshi panel intentionally shows only tradeable **binary
 > 50/50 sports games**. Multi-outcome prediction markets (e.g. "LeBron's Next
 > Team", elections) are not shown — the box-arbitrage strategy only applies to
 > two-outcome games.
 
-Releases: **[v1.1.0](https://github.com/anderson895/SportsBet-Pro/releases/tag/v1.1.0)**
-· [v1.0.0](https://github.com/anderson895/SportsBet-Pro/releases/tag/v1.0.0)
+Releases: **[v1.3.4 (latest)](https://github.com/anderson895/SportsBet-Pro/releases/tag/v1.3.4)**
+· [all releases](https://github.com/anderson895/SportsBet-Pro/releases)
 
 ---
 
@@ -75,19 +76,27 @@ Releases: **[v1.1.0](https://github.com/anderson895/SportsBet-Pro/releases/tag/v
 - **Kalshi 2026 API** — adapted to dollar-string fields (`yes_bid_dollars`,
   `volume_fp`) and `orderbook_fp` (`yes_dollars` / `no_dollars` levels);
   still backwards-compatible with the older integer-cents format
-- **Tests** — 132 passing (ported Polymarket suite + Kalshi tests: straddle
-  math, hedge sentinel, RSA-PSS signing, paper fills, DB scoping, DoH)
+- **Tests** — 247 passing (ported Polymarket suite + Kalshi tests: straddle
+  math, hedge sentinel, RSA-PSS signing, paper fills, settlement PnL import,
+  startup order reconcile, trade-detail rendering, DB scoping, DoH)
 - **DoH resolver** — covers `polymarket.com`, `kalshi.com`, `kalshi.co`
 
+### ✅ Live path exercised
+- **Kalshi live orders** — funded production account; live straddles have been
+  placed, filled, and settled, with realized PnL imported from the exchange's
+  settlement history. The observed bottleneck is **fill rate**, not correctness:
+  the 49¢ maker orders fill only on genuinely 50/50 markets, so completed cycles
+  are rare (widen the scan filters in Settings to cast a broader net).
+- **PyInstaller packaging** — shipped as `SportsBetPro.exe` (see Releases);
+  `build.bat` / `SportsBetPro.spec` rebuild it.
+
 ### 🔜 Next steps
-1. **Kalshi live order path** — auth is validated but the production account has
-   a $0.00 balance, so orders can't fill yet. To exercise the full live order
-   path, either fund the account (small risk) or create a **demo** account
-   (demo.kalshi.co, practice money) and set Environment → Demo in Settings.
-2. **PyInstaller packaging** — `SportsBetPro.spec` is ready; the `.exe` is not
-   built yet.
-3. **Paper-mode tuning** — let it run for a while and observe the hedge-sentinel
-   timeout (90s) and entry band (48–52¢); adjust in Settings if needed.
+1. **Fill-rate tuning** — the box-arb edge is proven per cycle (~+1.15%), but
+   entire days can pass with no fills. Widen the scan net in Settings (volume,
+   time-to-close window) and observe the fill rate before scaling risk.
+2. **Optional code signing** — the `.exe` is unsigned, so Windows SmartScreen
+   warns on first run ("More info → Run anyway"). An OV/EV certificate would
+   remove the warning for distribution.
 
 ---
 
