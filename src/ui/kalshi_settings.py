@@ -62,9 +62,11 @@ DEFAULTS = {
     "hedge_timeout_secs": 90.0,
     "hedge_max_price": 51,
     "hedge_retries": 3,
-    "min_volume": 5000,
-    "min_close_mins": 45.0,
-    "max_close_hours": 12.0,
+    # Mas malawak na lambat = mas maraming 50/50 candidate = mas mataas na
+    # fill rate, nang hindi hinahawakan ang 49¢ entry (box-arb edge)
+    "min_volume": 3000,
+    "min_close_mins": 30.0,
+    "max_close_hours": 24.0,
     "paper_start_usd": 1000.0,
 }
 

@@ -177,9 +177,9 @@ SECTIONS: tuple[Section, ...] = (
         "volume. Higher is safer and more liquid; lower surfaces more\n"
         "candidates.\n\n"
         "Skip markets closing sooner than — avoids the chaotic final\n"
-        "minutes of a game. Default 45 minutes.\n\n"
+        "minutes of a game. Default 30 minutes.\n\n"
         "Skip markets closing later than — ignores games still hours away.\n"
-        "Default 12 hours.\n\n"
+        "Default 24 hours.\n\n"
         "Sports to Trade — which leagues to scan. Leave all unchecked to\n"
         "auto-discover whatever is active.\n\n"
         "Paper Starting Balance — the pretend balance used in Paper mode.",

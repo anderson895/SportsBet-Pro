@@ -28,7 +28,7 @@ from src.ui.loading_overlay import LoadingOverlay
 from src.ui.poly_dashboard import PolyDashboard
 from src.ui.poly_settings import PolySettingsPage
 
-APP_VERSION = "1.3.3"
+APP_VERSION = "1.3.4"
 
 TF_LABELS = {"daily": "Daily", "4h": "4 Hours", "1h": "1 Hour", "15m": "15 Minutes"}
 
