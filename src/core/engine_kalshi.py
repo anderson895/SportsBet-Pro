@@ -211,7 +211,53 @@ class KalshiEngine(QObject):
                 self.stateChanged.emit(self.state.value)
                 return
         self._restore_cycle()
+        await self._reconcile_resting_orders()
         self._session_ready = True
+
+    async def _reconcile_resting_orders(self) -> None:
+        """LIVE start: kanselahin ang ORPHANED resting orders sa Kalshi.
+
+        Kapag na-restart (o nag-crash) ang app habang may nakalatag na
+        straddle, naiiwan ang mga totoong order sa exchange pero bagong
+        (walang-laman) na executor ang bumubukas — kaya wala nang
+        nagba-bantay o makakakansela sa kanila. Dito, ikinukumpara ang
+        totoong resting orders sa na-restore na cycle:
+
+        - kung tumutugma ang ticker sa na-restore na cycle -> IWAN (buhay
+          pa ang pagba-bantay nito sa fills/hedge/settlement)
+        - kung hindi -> ORPHAN -> kanselahin
+
+        Kapag walang na-restore na cycle, LAHAT ng resting ay orphan.
+        """
+        if not isinstance(self.executor, KalshiLiveExecutor):
+            return
+        if self._client is None:
+            return
+        try:
+            orders = await self._client.get_resting_orders()
+        except Exception as e:
+            filelog.warning("Resting-order reconcile skipped: %s", e)
+            return
+        known = self._cycle.ticker if self._cycle is not None else None
+        orphans = [o for o in orders if o.get("ticker") != known]
+        if not orphans:
+            return
+        cancelled = 0
+        for o in orphans:
+            oid = str(o.get("order_id") or o.get("id") or "")
+            if not oid:
+                continue
+            try:
+                await self._client.cancel_order(oid)
+                cancelled += 1
+            except Exception as e:
+                filelog.warning("Failed to cancel orphan order %s: %s",
+                                oid, e)
+        if cancelled:
+            kept = " (kept the restored straddle's orders)" if known else ""
+            self.log("WARN", f"Startup cleanup — cancelled {cancelled} "
+                             f"orphaned resting order(s) left on Kalshi from a "
+                             f"previous session{kept}")
 
     async def _loop(self) -> None:
         """Laging-bukas: nagsa-scan ng market feed (cards + chart) kahit

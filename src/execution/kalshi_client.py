@@ -213,6 +213,22 @@ class KalshiClient:
             "DELETE", f"/portfolio/events/orders/{order_id}", auth=True
         )
 
+    async def get_resting_orders(
+        self, ticker: Optional[str] = None
+    ) -> list[dict]:
+        """Lahat ng RESTING (open, di-pa-fill) orders sa account.
+
+        Ginagamit sa reconcile-on-start: kung na-restart ang app habang
+        may nakalatag na straddle, naiiwan ang mga order sa exchange pero
+        nawawalan ng bantay ang app — dito sila makikita at makakansela."""
+        params: dict[str, Any] = {"status": "resting"}
+        if ticker:
+            params["ticker"] = ticker
+        data = await self._request(
+            "GET", "/portfolio/orders", params=params, auth=True
+        )
+        return data.get("orders", [])
+
     async def get_fills(self, limit: int = 200,
                         ticker: Optional[str] = None) -> list[dict]:
         """Totoong fill history mula sa Kalshi (hindi ang lokal na tala).
