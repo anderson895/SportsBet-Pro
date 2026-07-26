@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 
 from src.storage.db import Database
-from src.ui.pages import local_time
+from src.ui.pages import local_datetime, local_time
 
 
 class LocalTimeTest(unittest.TestCase):
@@ -45,6 +45,29 @@ class LocalTimeTest(unittest.TestCase):
         self.assertEqual(local_time("2026-07-24T99:99:99+00:00"), "99:99:99")
         self.assertEqual(local_time(""), "")
         self.assertIsInstance(local_time("garbage"), str)
+
+
+class LocalDateTimeTest(unittest.TestCase):
+    """Trades table: petsa + 12-hour AM/PM (mas madaling basahin)."""
+
+    def test_includes_date_and_12hour_ampm(self) -> None:
+        expected = (
+            dt.datetime(2026, 7, 26, 21, 27, 36, tzinfo=dt.timezone.utc)
+            .astimezone().strftime("%b %d, %Y  %I:%M:%S %p")
+        )
+        got = local_datetime("2026-07-26T21:27:36+00:00")
+        self.assertEqual(got, expected)
+        self.assertRegex(got, r"(AM|PM)$")            # may AM/PM
+        self.assertRegex(got, r"^[A-Z][a-z]{2} \d{2}, \d{4}")  # may petsa
+
+    def test_handles_kalshi_z_suffix(self) -> None:
+        ours = local_datetime("2026-07-24T22:44:08+00:00")
+        theirs = local_datetime("2026-07-24T22:44:08.505604Z")
+        self.assertEqual(ours, theirs)
+
+    def test_unparseable_returns_raw(self) -> None:
+        self.assertEqual(local_datetime("garbage"), "garbage")
+        self.assertEqual(local_datetime(""), "")
 
 
 class SupersedeOpenTradesTest(unittest.TestCase):

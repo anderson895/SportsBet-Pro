@@ -62,6 +62,24 @@ def local_time(ts: str) -> str:
     return parsed.astimezone().strftime("%H:%M:%S")
 
 
+def local_datetime(ts: str) -> str:
+    """ISO timestamp -> "Jul 26, 2026  09:27:36 AM" sa LOCAL time.
+
+    Para sa Trades table: kasama ang PETSA at 12-hour na oras na may
+    AM/PM — mas madaling maintindihan kaysa sa 24-hour na oras lang,
+    lalo na kapag maraming araw ang trade history. Gaya ng local_time(),
+    ibinabalik ang hilaw na hiwa kapag hindi ma-parse.
+    """
+    raw = (ts or "").strip()
+    try:
+        parsed = dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return raw
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.astimezone().strftime("%b %d, %Y  %I:%M:%S %p")
+
+
 class TradesPage(QWidget):
     def __init__(self, db: ScopedDatabase, currency: str = "USD",
                  on_sync: Optional[Callable[[], None]] = None) -> None:
@@ -69,10 +87,13 @@ class TradesPage(QWidget):
         self._db = db
         self.table = QTableWidget(0, 8)
         self.table.setHorizontalHeaderLabels(
-            ["Time", "Market", "Side", "Action", "Price",
+            ["Date & Time", "Market", "Side", "Action", "Price",
              f"Size ({currency})", "Status", "PnL"]
         )
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        # Date & Time: auto-fit sa "Jul 26, 2026  09:27:36 AM"
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(
@@ -138,7 +159,7 @@ class TradesPage(QWidget):
             self.table.insertRow(r)
             pnl = row["pnl"]
             values = [
-                local_time(row["ts"]), row["market"], row["side"], row["action"],
+                local_datetime(row["ts"]), row["market"], row["side"], row["action"],
                 f"{row['price']:.2f}", f"{row['size']:.2f}",
                 STATUS_LABELS.get(status, status),
                 "" if pnl is None else f"{pnl:+.2f}",
