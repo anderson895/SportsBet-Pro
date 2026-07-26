@@ -236,9 +236,15 @@ class KalshiClient:
         )
         return data.get("market_positions", [])
 
-    async def get_settlements(self, limit: int = 20) -> list[dict]:
+    async def get_settlements(self, limit: int = 200) -> list[dict]:
+        """Settlement history — ground truth ng realized PnL.
+
+        Ang natapos nang market ay INAALIS sa /portfolio/positions, kaya
+        DITO lang makikita ang kinita/nalugi pagkatapos mag-settle. Bawat
+        row ay may yes/no counts + costs at ang market_result."""
         data = await self._request(
-            "GET", "/portfolio/settlements", params={"limit": limit}, auth=True
+            "GET", "/portfolio/settlements", params={"limit": limit},
+            auth=True,
         )
         return data.get("settlements", [])
 

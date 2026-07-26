@@ -703,6 +703,7 @@ class KalshiEngine(QObject):
         try:
             fills = await client.get_fills(limit=200)
             positions = await client.get_positions()
+            settlements = await client.get_settlements(limit=200)
         finally:
             if owned:
                 await client.aclose()
@@ -750,7 +751,12 @@ class KalshiEngine(QObject):
         for ticker, side in filled_keys:
             superseded += self._db.supersede_open_trades(ticker, side)
 
+        # Positions muna (bukas-pa-nagsara edge), tapos settlements — ito
+        # ang totoong pinagmumulan ng PnL dahil BURADO na ang settled na
+        # market sa /portfolio/positions. Parehong meta key ("kalshi_settle:
+        # {ticker}") kaya hindi madoble.
         settled = self._import_realized_pnl(positions)
+        settled += self._import_settlements(settlements)
 
         if imported or superseded or settled:
             self.tradeExecuted.emit()
@@ -762,8 +768,11 @@ class KalshiEngine(QObject):
                 bits.append(f"recorded PnL for {settled} closed market(s)")
             self.log("INFO", " — ".join(bits))
         else:
-            self.log("INFO", f"Already up to date — {len(fills)} fill(s) "
-                             "in Kalshi history, nothing new")
+            # Walang nagbago — huwag punuin ang Recent Logs / DB ng
+            # paulit-ulit na "nothing new" tuwing pinipindot ang Sync. Ang
+            # transient status sa Trades panel na ang nagsasabi nito.
+            filelog.info("Kalshi sync: already up to date (%d fills in "
+                         "history, nothing new)", len(fills))
         await self._refresh_balance()
         return imported, len(fills)
 
@@ -802,6 +811,50 @@ class KalshiEngine(QObject):
                 market=ticker, side="PAIR", action="SETTLE",
                 price=0.0, size=traded, status="FILLED", pnl=net, meta=meta,
                 ts=str(pos.get("last_updated_ts") or "") or None,
+            )
+            recorded += 1
+        return recorded
+
+    def _import_settlements(self, settlements: list[dict]) -> int:
+        """Magtala ng SETTLE row kada TAPOS NANG market mula sa settlement
+        history — ito ang totoong PnL na hindi na makikita sa positions.
+
+        Bawat settlement ay may yes/no counts + total costs at ang
+        market_result. Ang manalong side lang ang nagbabayad ng $1/kontrata:
+
+            payout = (result=='yes' ? yes_count : no_count) × $1
+            net    = payout − (yes_cost + no_cost) − fee
+
+        Idempotent — parehong `kalshi_settle:{ticker}` meta key kaya hindi
+        madoble sa _import_realized_pnl; ini-update lang kung nagbago.
+        """
+        recorded = 0
+        for s in settlements:
+            ticker = str(s.get("ticker") or "")
+            if not ticker:
+                continue
+            result = str(s.get("market_result") or "").lower()
+            if result not in ("yes", "no"):
+                continue  # hindi pa resolved bilang yes/no
+            yes_count = _dollars(s, "yes_count_fp")
+            no_count = _dollars(s, "no_count_fp")
+            cost = (_dollars(s, "yes_total_cost_dollars")
+                    + _dollars(s, "no_total_cost_dollars"))
+            fees = _dollars(s, "fee_cost")
+            if cost == 0 and yes_count == 0 and no_count == 0:
+                continue  # walang aktibidad
+            payout = (yes_count if result == "yes" else no_count) * 1.0
+            net = round(payout - cost - fees, 4)
+            meta = f"kalshi_settle:{ticker}"
+
+            if self._db.has_trade_meta(meta):
+                self._db.set_trade_pnl_by_meta(meta, net, round(cost, 4))
+                continue
+            self._db.add_trade(
+                market=ticker, side="PAIR", action="SETTLE",
+                price=0.0, size=round(cost, 4), status="FILLED",
+                pnl=net, meta=meta,
+                ts=str(s.get("settled_time") or "") or None,
             )
             recorded += 1
         return recorded

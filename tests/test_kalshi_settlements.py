@@ -26,6 +26,22 @@ def _pos(ticker, position="0.00", realized="0.0", fees="0.0",
     }
 
 
+def _settle(ticker, result, yes_count="5.00", no_count="5.00",
+            yes_cost="2.450000", no_cost="2.450000", fee="0.0",
+            ts="2026-07-25T05:27:26.4Z"):
+    """Isang /portfolio/settlements row (hugis ng totoong Kalshi response)."""
+    return {
+        "ticker": ticker,
+        "market_result": result,
+        "yes_count_fp": yes_count,
+        "no_count_fp": no_count,
+        "yes_total_cost_dollars": yes_cost,
+        "no_total_cost_dollars": no_cost,
+        "fee_cost": fee,
+        "settled_time": ts,
+    }
+
+
 class DollarsTest(unittest.TestCase):
     def test_parses_fixed_point_strings(self) -> None:
         self.assertAlmostEqual(_dollars({"x": "0.560000"}, "x"), 0.56)
@@ -114,6 +130,82 @@ class ImportRealizedPnlTest(unittest.TestCase):
         ])
         self.assertEqual(n, 2)
         self.assertAlmostEqual(self.db.total_pnl(), 0.3711, places=4)
+
+
+class ImportSettlementsTest(unittest.TestCase):
+    """Ang settled na market ay INAALIS sa /portfolio/positions, kaya walang
+    PnL na malalaman doon — dito, mula sa /portfolio/settlements, kinukuha
+    ang totoong kita ng bawat natapos nang straddle."""
+
+    def setUp(self) -> None:
+        base = Database(Path(tempfile.mkdtemp()) / "t.db")
+        self.db = base.scope("kalshi")
+        self.engine = KalshiEngine(self.db)
+
+    def test_records_pnl_for_a_yes_result(self) -> None:
+        """28-pair straddle, CHC nanalo: 28×$1 − $27.44 − $0.2451 = +0.3149."""
+        n = self.engine._import_settlements([
+            _settle("CHCPIT-CHC", "yes", yes_count="28.00", no_count="28.00",
+                    yes_cost="13.720000", no_cost="13.720000",
+                    fee="0.245100"),
+        ])
+        self.assertEqual(n, 1)
+        rows = self.db.recent_trades()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["action"], "SETTLE")
+        self.assertAlmostEqual(rows[0]["pnl"], 0.3149, places=4)
+        self.assertAlmostEqual(rows[0]["size"], 27.44, places=2)
+
+    def test_records_pnl_for_a_no_result(self) -> None:
+        """Result 'no' — ang NO count ang nagbabayad: 5 − 4.90 − 0.0438."""
+        n = self.engine._import_settlements([
+            _settle("LAASF-LAA", "no", fee="0.043800"),
+        ])
+        self.assertEqual(n, 1)
+        self.assertAlmostEqual(self.db.total_pnl(), 0.0562, places=4)
+
+    def test_all_four_real_settlements_sum_up(self) -> None:
+        """Totoong account: apat na settlement -> +$0.5273."""
+        n = self.engine._import_settlements([
+            _settle("CHCPIT-CHC", "yes", yes_count="28.00", no_count="28.00",
+                    yes_cost="13.720000", no_cost="13.720000",
+                    fee="0.245100"),
+            _settle("AZWSH-AZ", "yes", fee="0.043800"),
+            _settle("TIJLEO-TIJ", "yes", fee="0.000000"),
+            _settle("LAASF-LAA", "no", fee="0.043800"),
+        ])
+        self.assertEqual(n, 4)
+        self.assertAlmostEqual(self.db.total_pnl(), 0.5273, places=4)
+
+    def test_skips_unresolved_markets(self) -> None:
+        n = self.engine._import_settlements([_settle("PENDING", "")])
+        self.assertEqual(n, 0)
+        self.assertEqual(self.db.recent_trades(), [])
+
+    def test_is_idempotent(self) -> None:
+        """Ligtas i-sync nang paulit-ulit — walang dobleng row."""
+        rows = [_settle("AZWSH-AZ", "yes", fee="0.043800")]
+        self.assertEqual(self.engine._import_settlements(rows), 1)
+        self.assertEqual(self.engine._import_settlements(rows), 0)
+        self.assertEqual(len(self.db.recent_trades()), 1)
+
+    def test_does_not_double_count_with_positions(self) -> None:
+        """Parehong meta key sa _import_realized_pnl — kung nauna ang isa,
+        hindi na magdadagdag ang isa pa (i-update lang kung nagbago)."""
+        self.engine._import_realized_pnl(
+            [_pos("AZWSH-AZ", realized="0.10", fees="0.0438", traded="4.90")]
+        )
+        added = self.engine._import_settlements(
+            [_settle("AZWSH-AZ", "yes", fee="0.043800")]
+        )
+        self.assertEqual(added, 0)
+        self.assertEqual(len(self.db.recent_trades()), 1)
+        self.assertAlmostEqual(self.db.total_pnl(), 0.0562, places=4)
+
+    def test_ignores_rows_without_ticker(self) -> None:
+        self.assertEqual(
+            self.engine._import_settlements([{"market_result": "yes"}]), 0
+        )
 
 
 if __name__ == "__main__":
