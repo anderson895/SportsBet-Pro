@@ -43,6 +43,19 @@ from src.ui.main_window import MainWindow
 def main() -> None:
     setup_logging()  # lahat ng errors -> data/app.log
 
+    # Windows: itakda ang sariling AppUserModelID BAGO gumawa ng window.
+    # Kung wala nito, iginugrupo ng Windows ang app sa ilalim ng host
+    # process at ipinapakita ang GENERIC na taskbar icon kahit tama ang
+    # setWindowIcon — kaya "walang icon" ang lumalabas sa taskbar.
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "SportsBetPro.Trading.App"
+            )
+        except Exception:  # hindi kritikal — huwag pigilan ang startup
+            pass
+
     app = QApplication(sys.argv)
     app.setApplicationName("SportsBet Pro")
     icon_file = resource_path("icon_square.png")
