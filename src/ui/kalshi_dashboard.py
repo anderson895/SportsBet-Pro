@@ -11,7 +11,7 @@ from __future__ import annotations
 import datetime as dt
 
 import qtawesome as qta
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QFrame,
@@ -126,7 +126,7 @@ class KalshiDashboard(QWidget):
         outcomes.addWidget(self._no_lbl)
         outcomes.addStretch()
 
-        self._strategy_label = QLabel("Strategy: idle (press START BOT)")
+        self._strategy_label = QLabel("Strategy: loading live market feed…")
         self._strategy_label.setProperty("muted", True)
         self._strategy_label.setWordWrap(True)
 
@@ -186,10 +186,11 @@ class KalshiDashboard(QWidget):
         self._grid.setSpacing(14)
         self._grid.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        self._empty_hint = QLabel("Press START BOT to scan live sports "
-                                  "markets…")
-        self._empty_hint.setProperty("muted", True)
-        self._grid.addWidget(self._empty_hint, 0, 0)
+        # Laging-bukas ang market feed (kahit STOPPED ang bot) — kaya
+        # loading spinner agad, hindi "Press START BOT"
+        self._grid.addWidget(
+            self._make_hint("Scanning live sports markets…", loading=True),
+            0, 0)
 
         mkt_scroll = QScrollArea()
         mkt_scroll.setWidgetResizable(True)
@@ -306,7 +307,8 @@ class KalshiDashboard(QWidget):
         # READY muna, tapos by volume — para nasa taas ang tradeable
         games.sort(key=lambda g: (not g["ready"], -g["vol"]))
         self._all_games = [g for g in games if len(g["teams"]) >= 2]
-        self._has_scanned = bool(rows)
+        # May natapos nang scan (kahit 0 rows) — iba na ang empty message
+        self._has_scanned = True
         self._apply_search()
 
     DISPLAY_CAP = 60  # ilang card ang irerender (search ay sa LAHAT pa rin)
@@ -327,6 +329,31 @@ class KalshiDashboard(QWidget):
         self._match_count = len(matches)
         self._games = matches[:self.DISPLAY_CAP]
         self._render_grid()
+
+    @staticmethod
+    def _make_hint(msg: str, loading: bool) -> QWidget:
+        """Empty-state hint ng markets grid. Kapag `loading`, may umiikot
+        na spinner sa tabi ng mensahe para malinaw sa user na nagpo-proseso
+        pa (hindi nakatigil o naghihintay ng START)."""
+        host = QWidget()
+        # Transparent — kung hindi, mamamana nito ang itim na page
+        # background sa loob ng mas mapusyaw na panel (tulad ng gridHost)
+        host.setObjectName("emptyHint")
+        host.setStyleSheet("#emptyHint { background: transparent; }")
+        lay = QHBoxLayout(host)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+        if loading:
+            spinner = qta.IconWidget("fa6s.spinner", color=theme.MUTED,
+                                     size=QSize(16, 16))
+            spinner.setIcon(qta.icon("fa6s.spinner", color=theme.MUTED,
+                                     animation=qta.Spin(spinner)))
+            lay.addWidget(spinner)
+        lbl = QLabel(msg)
+        lbl.setProperty("muted", True)
+        lay.addWidget(lbl)
+        lay.addStretch()
+        return host
 
     def _render_grid(self) -> None:
         # Linisin ang grid. Ang takeAt() ay nag-aalis lang sa LAYOUT, at ang
@@ -355,15 +382,17 @@ class KalshiDashboard(QWidget):
 
         if not games:
             self._counter_lbl.setText("—")
+            # Laging-bukas ang scanner (hindi kailangang naka-START ang
+            # bot) — kaya loading spinner habang wala pang laman, para
+            # halatang nagpo-proseso pa at hindi nakatigil.
             if self._search.text().strip():
-                msg = "No match for your search."
+                msg, loading = "No match for your search.", False
             elif getattr(self, "_has_scanned", False):
-                msg = "Scanning… no candidate games yet."
+                msg = "No candidate games right now — rescanning…"
+                loading = True
             else:
-                msg = "Press START BOT to scan live sports markets…"
-            hint = QLabel(msg)
-            hint.setProperty("muted", True)
-            self._grid.addWidget(hint, 0, 0)
+                msg, loading = "Scanning live sports markets…", True
+            self._grid.addWidget(self._make_hint(msg, loading), 0, 0)
             return
 
         for i, game in enumerate(games):

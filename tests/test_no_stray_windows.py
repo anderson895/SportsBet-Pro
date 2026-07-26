@@ -101,7 +101,7 @@ class MarketGridRenderTest(unittest.TestCase):
         _app.processEvents()
         visible_hints = [
             w.text() for w in self.dash.findChildren(QLabel)
-            if "START BOT to scan" in w.text() and w.isVisible()
+            if "Scanning live sports markets" in w.text() and w.isVisible()
         ]
         self.assertEqual(visible_hints, [])
 
