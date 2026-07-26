@@ -1,31 +1,29 @@
-"""Kalshi settings page — credentials + straddle strategy knobs.
+"""Kalshi settings page — credentials + mean-reversion strategy knobs.
 
-Secrets (API Key ID + RSA private key PEM) -> Windows Credential Manager;
-numbers -> SQLite (naka-scope sa "kalshi." prefix via ScopedDatabase).
+Same strategy settings as the Polymarket page (risk, timeframe, stretch band,
+take-profit, death-trap filters) plus Kalshi's own credentials (API Key ID +
+RSA private key PEM + environment). Secrets go to Windows Credential Manager;
+numbers to SQLite (scoped to the "kalshi." prefix via ScopedDatabase).
 
-Ang RSA private key ay pwedeng:
-- i-PASTE ang buong PEM text (itinatago sa Credential Manager), O
-- ituro ang path ng .pem file (kapag masyadong malaki ang 4096-bit PEM
-  para sa ~2.5KB Credential Manager blob limit)
+The RSA private key may be pasted (stored in Credential Manager) or given as a
+.pem file path (for keys too large for the ~2.5KB Credential Manager blob).
 """
 from __future__ import annotations
 
-import asyncio
+import datetime as dt
+import time
 
 import qtawesome as qta
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPlainTextEdit,
-    QPushButton,
     QScrollArea,
-    QSpinBox,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -37,54 +35,22 @@ from src.ui import theme
 from src.ui.settings_header import SettingsHeader, recommended_risk
 from src.ui.widgets import Card, run_async
 
-# Friendly na sport name -> Kalshi series ticker. Ito ang ipinapakita bilang
-# checkboxes; hindi na kailangang alam ng user ang cryptic na ticker codes.
-SPORT_OPTIONS = [
-    ("Baseball — MLB", "KXMLBGAME"),
-    ("Basketball — NBA", "KXNBAGAME"),
-    ("Basketball — WNBA", "KXWNBAGAME"),
-    ("Basketball — College", "KXNCAABGAME"),
-    ("Football — NFL", "KXNFLGAME"),
-    ("Football — College", "KXNCAAFGAME"),
-    ("Hockey — NHL", "KXNHLGAME"),
-    ("Soccer — EPL", "KXEPLGAME"),
-    ("Soccer — Champions League", "KXUCLGAME"),
-    ("Soccer — La Liga", "KXLALIGAGAME"),
-    ("Soccer — Serie A", "KXSERIEAGAME"),
-    ("Soccer — Ligue 1", "KXLIGUE1GAME"),
-    ("Soccer — MLS", "KXMLSGAME"),
-    ("Soccer — Liga MX", "KXLIGAMXGAME"),
-]
-
 DEFAULTS = {
     "risk_usd": 5.0,  # maliit na default — ligtas sa unang subok
-    "entry_price_cents": 49,
-    "hedge_timeout_secs": 90.0,
-    "hedge_max_price": 51,
-    "hedge_retries": 3,
-    # Mas malawak na lambat = mas maraming 50/50 candidate = mas mataas na
-    # fill rate, nang hindi hinahawakan ang 49¢ entry (box-arb edge)
-    "min_volume": 3000,
-    "min_close_mins": 30.0,
-    "max_close_hours": 24.0,
+    "min_stretch_pct": 1.5,
+    "max_stretch_pct": 2.5,
+    "profit_target_pct": 100.0,
+    "volume_spike_mult": 2.0,
+    "premium_threshold_pct": 0.15,
     "paper_start_usd": 1000.0,
 }
 
 
-def _spin_f(value: float, suffix: str, maximum: float = 100_000.0,
-            minimum: float = 0.01) -> QDoubleSpinBox:
+def _spin(value: float, suffix: str, maximum: float = 100_000.0,
+          minimum: float = 0.01) -> QDoubleSpinBox:
     box = QDoubleSpinBox()
     box.setRange(minimum, maximum)
     box.setDecimals(2)
-    box.setSuffix(f" {suffix}")
-    box.setValue(value)
-    return box
-
-
-def _spin_i(value: int, suffix: str, minimum: int = 1,
-            maximum: int = 1_000_000) -> QSpinBox:
-    box = QSpinBox()
-    box.setRange(minimum, maximum)
     box.setSuffix(f" {suffix}")
     box.setValue(value)
     return box
@@ -118,9 +84,38 @@ class KalshiSettingsPage(QWidget):
         self._mode.addItems(["Paper (simulated — no real money)",
                              "Live (REAL MONEY — Kalshi)"])
         self._mode.setCurrentIndex(
-            1 if g("trading_mode", "paper") == "live" else 0
-        )
+            1 if g("trading_mode", "paper") == "live" else 0)
         add_field("Trading Mode", self._mode)
+
+        mode_warn = QLabel(
+            "Live mode requires Kalshi API access (API Key ID + RSA private "
+            "key) and a USD balance. If the connection fails, the bot "
+            "automatically falls back to Paper mode."
+        )
+        mode_warn.setProperty("muted", True)
+        mode_warn.setWordWrap(True)
+        form.addWidget(mode_warn)
+
+        # --- Market timeframe ---------------------------------------------
+        # Kalshi's clean BTC up/down ladder (KXBTCD) is hourly; daily attempted
+        # when listed. Shorter frames have no Kalshi up/down market.
+        self._timeframe = QComboBox()
+        self._timeframes = [("1 Hour", "1h"), ("Daily", "daily")]
+        self._timeframe.addItems([label for label, _ in self._timeframes])
+        saved_tf = str(g("market_timeframe", "1h"))
+        self._timeframe.setCurrentIndex(next(
+            (i for i, (_, v) in enumerate(self._timeframes) if v == saved_tf), 0
+        ))
+        add_field("Market Timeframe (Kalshi BTC Above/Below)", self._timeframe)
+
+        tf_note = QLabel(
+            "The bot pins the KXBTCD strike nearest the period open as the "
+            "up/down pivot; stretch thresholds scale automatically to the "
+            "timeframe (e.g. the 1.5% daily entry becomes ~0.31% on 1-hour)."
+        )
+        tf_note.setProperty("muted", True)
+        tf_note.setWordWrap(True)
+        form.addWidget(tf_note)
 
         # --- Environment --------------------------------------------------
         self._env = QComboBox()
@@ -133,7 +128,7 @@ class KalshiSettingsPage(QWidget):
         )
         env_lab = add_field("Environment", self._env)
 
-        # --- Credentials --------------------------------------------------
+        # --- Credentials (LIVE only) --------------------------------------
         key_container = QWidget()
         key_row = QHBoxLayout(key_container)
         key_row.setContentsMargins(0, 0, 0, 0)
@@ -186,83 +181,54 @@ class KalshiSettingsPage(QWidget):
         cred_note.setWordWrap(True)
         form.addWidget(cred_note)
 
-        self._live_only = [env_lab, self._env, api_lab, key_container,
-                           pem_lab, self._pem_paste, path_lab,
-                           self._pem_path, cred_note]
+        self._live_only = [
+            mode_warn, env_lab, self._env, api_lab, key_container,
+            pem_lab, self._pem_paste, path_lab, self._pem_path, cred_note,
+        ]
 
-        # --- Strategy numbers --------------------------------------------
-        self._risk = _spin_f(float(g("risk_usd", DEFAULTS["risk_usd"])), "USD")
-        add_field("Risk Per Straddle (USD)", self._risk)
+        # --- Strategy numbers ---------------------------------------------
+        self._risk = _spin(float(g("risk_usd", DEFAULTS["risk_usd"])), "USD")
+        add_field("Risk Per Trade (USD)", self._risk)
 
-        self._entry = _spin_i(
-            int(float(g("entry_price_cents", DEFAULTS["entry_price_cents"]))),
-            "¢ per side", 1, 99,
-        )
-        add_field("Entry Price (resting bid per side)", self._entry)
+        self._min_stretch = _spin(
+            float(g("min_stretch_pct", DEFAULTS["min_stretch_pct"])), "%", 10.0)
+        add_field("Entry Stretch Band (%)", self._min_stretch)
 
-        self._hedge_max = _spin_i(
-            int(float(g("hedge_max_price", DEFAULTS["hedge_max_price"]))),
-            "¢ max", 1, 99,
-        )
-        add_field("Hedge Sentinel — max hedge price", self._hedge_max)
+        self._max_stretch = _spin(
+            float(g("max_stretch_pct", DEFAULTS["max_stretch_pct"])), "%", 10.0)
+        add_field("Max Stretch — Death Trap Limit (%)", self._max_stretch)
 
-        self._hedge_timeout = _spin_f(
-            float(g("hedge_timeout_secs", DEFAULTS["hedge_timeout_secs"])),
-            "seconds", 3600.0, 5.0,
-        )
-        add_field("Hedge Sentinel — single-sided timeout", self._hedge_timeout)
+        self._profit = _spin(
+            float(g("profit_target_pct", DEFAULTS["profit_target_pct"])),
+            "%", 1000.0)
+        add_field("Take Profit (%)", self._profit)
 
-        self._min_volume = _spin_i(
-            int(float(g("min_volume", DEFAULTS["min_volume"]))),
-            "contracts", 0,
-        )
-        add_field("Minimum Market Volume", self._min_volume)
+        self._volume_mult = _spin(
+            float(g("volume_spike_mult", DEFAULTS["volume_spike_mult"])),
+            "× baseline", 10.0)
+        add_field("Volume Spike Filter — block entry above (×)",
+                  self._volume_mult)
 
-        self._min_close = _spin_f(
-            float(g("min_close_mins", DEFAULTS["min_close_mins"])),
-            "minutes", 100_000.0, 1.0,
-        )
-        add_field("Skip markets closing sooner than", self._min_close)
+        self._premium = _spin(
+            float(g("premium_threshold_pct", DEFAULTS["premium_threshold_pct"])),
+            "%", 5.0)
+        add_field("Coinbase Premium Filter — block entry above (±%)",
+                  self._premium)
 
-        self._max_close = _spin_f(
-            float(g("max_close_hours", DEFAULTS["max_close_hours"])),
-            "hours", 10_000.0, 0.1,
-        )
-        add_field("Skip markets closing later than", self._max_close)
+        self._econ_day = QCheckBox(
+            "Economic Data Day — block entries TODAY (Fed meeting, CPI, etc.)")
+        self._econ_day.setChecked(
+            g("econ_block_date")
+            == dt.datetime.now(dt.timezone.utc).date().isoformat())
+        self._econ_day.setContentsMargins(2, 0, 2, 0)
+        form.addSpacing(8)
+        form.addWidget(self._econ_day)
+        form.addSpacing(4)
 
-        # Sports to trade — friendly na checkboxes (walang cryptic tickers)
-        saved_series = {t.strip() for t in
-                        str(g("series_tickers", "")).split(",") if t.strip()}
-        self._sport_cbs: list[QCheckBox] = []
-        sports_grid = QGridLayout()
-        sports_grid.setContentsMargins(0, 2, 0, 0)
-        sports_grid.setHorizontalSpacing(20)
-        sports_grid.setVerticalSpacing(6)
-        for i, (label, ticker) in enumerate(SPORT_OPTIONS):
-            cb = QCheckBox(label)
-            cb.setChecked(ticker in saved_series)
-            cb.setCursor(Qt.CursorShape.PointingHandCursor)
-            self._sport_cbs.append(cb)
-            sports_grid.addWidget(cb, i // 2, i % 2)  # 2 columns
-        sports_wrap = QWidget()
-        sports_wrap.setLayout(sports_grid)
-        # Transparent para mag-blend sa card (walang itim na kahon sa likod)
-        sports_wrap.setStyleSheet("background: transparent;")
-        add_field("Sports to Trade", sports_wrap)
-        sports_hint = QLabel(
-            "Pick the leagues to scan for 50/50 games. Leave all unchecked "
-            "to auto-discover whatever is active."
-        )
-        sports_hint.setProperty("muted", True)
-        sports_hint.setWordWrap(True)
-        form.addWidget(sports_hint)
-
-        self._paper_start = _spin_f(
-            float(g("paper_start_usd", DEFAULTS["paper_start_usd"])), "USD"
-        )
+        self._paper_start = _spin(
+            float(g("paper_start_usd", DEFAULTS["paper_start_usd"])), "USD")
         self._paper_start_lab = add_field(
-            "Paper Starting Balance (USD)", self._paper_start
-        )
+            "Paper Starting Balance (USD)", self._paper_start)
 
         def _toggle_mode_fields(index: int) -> None:
             paper = index == 0
@@ -272,17 +238,9 @@ class KalshiSettingsPage(QWidget):
                 w.setVisible(not paper)
 
         self._mode.currentIndexChanged.connect(_toggle_mode_fields)
-        # HUWAG tawagin dito! Ang `form` ay standalone pa na QVBoxLayout, at
-        # ang layout na walang parent widget ay HINDI pa nagre-reparent ng
-        # mga widget nito. Ang setVisible(True) sa parentless na widget ay
-        # nagpapakita nito bilang TOP-LEVEL WINDOW — kaya kumikislap ang
-        # maliliit na kahon sa pagbukas ng app. Tinatawag sa dulo ng
-        # __init__, pagkatapos ma-install ang form sa panel.
         self._toggle_mode_fields = _toggle_mode_fields
 
         # --- Sticky header (balance + Save/Reset/Recommended) -------------
-        # Nasa LABAS ng scroll area para laging kita ang Save — hindi na
-        # makakalimutang i-save bago pindutin ang START BOT.
         self.header = SettingsHeader(
             currency="USD",
             on_save=self._save,
@@ -292,16 +250,13 @@ class KalshiSettingsPage(QWidget):
         )
         self._last_balance: float | None = None
         self._balance_fetched_ts = 0.0
-        # Pag-palit ng Paper/Live: ibang balance ang dapat ipakita
-        self._mode.currentIndexChanged.connect(
-            lambda _i: self._fetch_balance()
-        )
+        self._mode.currentIndexChanged.connect(lambda _i: self._fetch_balance())
 
         note = QLabel(
             "API Key ID is stored in Windows Credential Manager. Large RSA "
             "keys that exceed its size limit are saved to "
-            "data\\kalshi_key.pem instead.\nEntry at 49¢ + 49¢ with a $1.00 "
-            "settlement leaves ~+1.1% per completed cycle after maker fees."
+            "data\\kalshi_key.pem instead.\nLeave a secret field blank to keep "
+            "its current value."
         )
         note.setProperty("muted", True)
         note.setWordWrap(True)
@@ -330,8 +285,6 @@ class KalshiSettingsPage(QWidget):
         root.addWidget(self.header)
         root.addWidget(scroll)
 
-        # Ngayon lang — naka-parent na ang mga field sa panel, kaya ang
-        # setVisible() ay hindi na gagawa ng stray na window
         self._toggle_mode_fields(self._mode.currentIndex())
 
     # ------------------------------------------------------------------ save
@@ -352,38 +305,38 @@ class KalshiSettingsPage(QWidget):
             try:
                 secrets.set_secret(secrets.KEY_KALSHI_PEM, pem)
             except Exception:
-                # Ang RSA PEM ay madalas lumampas sa ~2.5KB blob limit ng
-                # Windows Credential Manager (WinError 1783). Fallback:
-                # isulat sa protektadong file sa data dir at gamitin ang path.
+                # RSA PEM often exceeds the ~2.5KB Credential Manager blob
+                # limit (WinError 1783). Fallback: write to a protected file
+                # in the data dir and use the path.
                 from src.core.paths import DATA_DIR
                 DATA_DIR.mkdir(parents=True, exist_ok=True)
                 key_file = DATA_DIR / "kalshi_key.pem"
                 key_file.write_text(pem, encoding="utf-8")
-                secrets.set_secret(secrets.KEY_KALSHI_PEM, "")  # linisin
+                secrets.set_secret(secrets.KEY_KALSHI_PEM, "")
                 self._db.set_setting("pem_path", str(key_file))
                 self._pem_path.setText(str(key_file))
             self._pem_paste.clear()
 
         self._db.set_setting(
-            "trading_mode", "live" if self._mode.currentIndex() == 1 else "paper"
-        )
+            "trading_mode", "live" if self._mode.currentIndex() == 1 else "paper")
         self._db.set_setting("env", self._envs[self._env.currentIndex()][1])
+        self._db.set_setting(
+            "market_timeframe",
+            self._timeframes[self._timeframe.currentIndex()][1])
         self._db.set_setting("risk_usd", self._risk.value())
-        self._db.set_setting("entry_price_cents", self._entry.value())
-        self._db.set_setting("hedge_max_price", self._hedge_max.value())
-        self._db.set_setting("hedge_timeout_secs", self._hedge_timeout.value())
-        self._db.set_setting("min_volume", self._min_volume.value())
-        self._db.set_setting("min_close_mins", self._min_close.value())
-        self._db.set_setting("max_close_hours", self._max_close.value())
-        chosen = [ticker for (label, ticker), cb
-                  in zip(SPORT_OPTIONS, self._sport_cbs) if cb.isChecked()]
-        self._db.set_setting("series_tickers", ",".join(chosen))
+        self._db.set_setting("min_stretch_pct", self._min_stretch.value())
+        self._db.set_setting("max_stretch_pct", self._max_stretch.value())
+        self._db.set_setting("profit_target_pct", self._profit.value())
+        self._db.set_setting("volume_spike_mult", self._volume_mult.value())
+        self._db.set_setting("premium_threshold_pct", self._premium.value())
+        today = dt.datetime.now(dt.timezone.utc).date().isoformat()
+        self._db.set_setting(
+            "econ_block_date", today if self._econ_day.isChecked() else "")
         self._db.set_setting("paper_start_usd", self._paper_start.value())
 
         self._set_status("Settings saved ✓", theme.GREEN)
         self.modeSaved.emit(
-            "LIVE" if self._mode.currentIndex() == 1 else "PAPER"
-        )
+            "LIVE" if self._mode.currentIndex() == 1 else "PAPER")
         if self._mode.currentIndex() == 1:
             self._validate_credentials()
 
@@ -395,19 +348,13 @@ class KalshiSettingsPage(QWidget):
     # ------------------------------------------------ balance + recommend
 
     def showEvent(self, event) -> None:  # noqa: N802 (Qt naming)
-        """Unang bukas ng page (o balik dito): i-fetch ang balance para
-        UNA itong makita bago mag-configure — iwas taya nang lampas sa
-        pondo."""
         super().showEvent(event)
-        import time as _t
-        if _t.monotonic() - self._balance_fetched_ts > 60:
+        if time.monotonic() - self._balance_fetched_ts > 60:
             self._fetch_balance()
 
     def _fetch_balance(self) -> None:
-        import time as _t
-        self._balance_fetched_ts = _t.monotonic()
+        self._balance_fetched_ts = time.monotonic()
 
-        # Paper mode: paper balance = starting balance + naipong PnL
         if self._mode.currentIndex() == 0:
             start = float(self._db.get_setting(
                 "paper_start_usd", DEFAULTS["paper_start_usd"]))
@@ -442,16 +389,9 @@ class KalshiSettingsPage(QWidget):
                 if client is not None:
                     await client.aclose()
 
-        run_async(_run())   # no-op kung walang loop (hal. sa UI tests)
+        run_async(_run())
 
     def _apply_recommended(self) -> None:
-        """Isang click: ligtas na testing values na pasok sa balance.
-
-        Risk ≈ 10% ng balance (min $2) — sapat para makakita ng totoong
-        fills nang hindi nalalagay sa alanganin ang buong pondo.
-        """
-        # Walang balance = hindi pa masasabi kung magkano ang ligtas.
-        # Mag-fetch muna kaysa mag-alok ng maling maliit na halaga.
         if self._last_balance is None:
             self._fetch_balance()
             self._set_status(
@@ -463,21 +403,15 @@ class KalshiSettingsPage(QWidget):
 
         rec = recommended_risk(self._last_balance, minimum=2.0)
         self._risk.setValue(rec)
-        # Lahat ng liga ay i-scan — ang Minimum Market Volume na ang
-        # pumipili ng maganda; mas maraming liga = mas maraming pagkakataon
-        for cb in self._sport_cbs:
-            cb.setChecked(True)
-        self._entry.setValue(DEFAULTS["entry_price_cents"])
-        self._hedge_max.setValue(DEFAULTS["hedge_max_price"])
-        self._hedge_timeout.setValue(DEFAULTS["hedge_timeout_secs"])
-        self._min_volume.setValue(DEFAULTS["min_volume"])
-        self._min_close.setValue(DEFAULTS["min_close_mins"])
-        self._max_close.setValue(DEFAULTS["max_close_hours"])
+        self._min_stretch.setValue(DEFAULTS["min_stretch_pct"])
+        self._max_stretch.setValue(DEFAULTS["max_stretch_pct"])
+        self._profit.setValue(DEFAULTS["profit_target_pct"])
+        self._volume_mult.setValue(DEFAULTS["volume_spike_mult"])
+        self._premium.setValue(DEFAULTS["premium_threshold_pct"])
         self._set_status(
             f"Recommended values applied — Risk ${rec:,.2f} (10% of your "
-            f"{self._last_balance:,.2f} USD balance), entry 49¢, "
-            f"hedge 51¢/90s, all {len(self._sport_cbs)} leagues on. "
-            "Click Save Settings to apply.",
+            f"{self._last_balance:,.2f} USD balance), stretch 1.5/2.5%, "
+            "TP 100%. Click Save Settings to apply.",
             theme.AMBER,
         )
 
@@ -521,18 +455,17 @@ class KalshiSettingsPage(QWidget):
                     await client.aclose()
 
         self._set_status(
-            "Settings saved ✓ — verifying Kalshi credentials…", theme.AMBER
-        )
-        run_async(_run())   # no-op kung walang loop (hal. sa UI tests)
+            "Settings saved ✓ — verifying Kalshi credentials…", theme.AMBER)
+        run_async(_run())
 
     def _reset(self) -> None:
         self._risk.setValue(DEFAULTS["risk_usd"])
-        self._entry.setValue(DEFAULTS["entry_price_cents"])
-        self._hedge_max.setValue(DEFAULTS["hedge_max_price"])
-        self._hedge_timeout.setValue(DEFAULTS["hedge_timeout_secs"])
-        self._min_volume.setValue(DEFAULTS["min_volume"])
-        self._min_close.setValue(DEFAULTS["min_close_mins"])
-        self._max_close.setValue(DEFAULTS["max_close_hours"])
+        self._min_stretch.setValue(DEFAULTS["min_stretch_pct"])
+        self._max_stretch.setValue(DEFAULTS["max_stretch_pct"])
+        self._profit.setValue(DEFAULTS["profit_target_pct"])
+        self._volume_mult.setValue(DEFAULTS["volume_spike_mult"])
+        self._premium.setValue(DEFAULTS["premium_threshold_pct"])
+        self._econ_day.setChecked(False)
         self._paper_start.setValue(DEFAULTS["paper_start_usd"])
         self._set_status("Defaults restored — click Save Settings to apply",
                          theme.MUTED)

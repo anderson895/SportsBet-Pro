@@ -90,6 +90,10 @@ class Database:
         self._conn.execute("DELETE FROM logs WHERE exchange = ?", (exchange,))
         self._conn.commit()
 
+    def clear_trades(self, exchange: str) -> None:
+        self._conn.execute("DELETE FROM trades WHERE exchange = ?", (exchange,))
+        self._conn.commit()
+
     # -------------------------------------------------------------- trades
 
     def add_trade(
@@ -233,6 +237,9 @@ class ScopedDatabase:
 
     def clear_logs(self) -> None:
         self._db.clear_logs(self.exchange)
+
+    def clear_trades(self) -> None:
+        self._db.clear_trades(self.exchange)
 
     # -------------------------------------------------------------- trades
 

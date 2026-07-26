@@ -7,42 +7,41 @@ Both can run at the same time.
 | Panel | Strategy | Markets | Currency |
 |---|---|---|---|
 | **Polymarket** | Mean Reversion ("Rubber Band") | Daily / 4h / 1h / 15m BTC Up/Down | USDC (Polygon) |
-| **Kalshi** | Internal Straddle / Box Arbitrage | 50/50 sports moneylines (NBA/NFL/MLB…) | USD |
+| **Kalshi** | Mean Reversion ("Rubber Band") | 1h / Daily BTC Above/Below (KXBTCD) | USD |
+
+Both panels now run the **same** mean-reversion BTC strategy — only the venue
+(and the panel branding) differs.
 
 ---
 
-## 🆕 What's New in v1.3.4
+## 🆕 What's New in v1.4.0
 
-The v1.3.x releases focused on the Kalshi live path, correctness, and polish:
+**The Kalshi panel now runs the same Mean-Reversion BTC strategy as Polymarket.**
+The old Internal Straddle / Box-Arbitrage on 50/50 sports markets has been
+retired; the reference PDF is now background material only.
 
-- **Wider default scan filters** (v1.3.4) — a higher fill rate without touching
-  the **49¢ entry** that preserves the box-arb edge: min volume **3000**, skip
-  markets closing sooner than **30 min** / later than **24 h**
-- **Correct Polymarket trade details** (v1.3.3) — the trade drill-down now shows
-  a **directional** summary (side UP/DOWN, avg entry, cost, net PnL) instead of
-  the Kalshi YES/NO straddle template
-- **Windows taskbar icon** (v1.3.2) — an explicit AppUserModelID so the app icon
-  shows on the taskbar
-- **Orphaned-order cleanup on startup** (v1.3.1) — if the app restarts while a
-  live straddle is resting, leftover exchange orders are reconciled and
-  cancelled on the next START (no untracked real-money exposure)
-- **Realized PnL from settlements** (v1.3.0) — Kalshi settlement history is
-  imported so closed straddles show their true profit/loss in Trades and
-  Statistics; plus a live-market loading state, quieter sync logs, and
-  **date + 12-hour AM/PM** trade timestamps
+- **Kalshi = Mean Reversion** — a Binance BTC feed drives the same
+  `strategy/mean_reversion` entry/exit rules and death-trap filters used by
+  Polymarket. Kalshi has no single "Up or Down" market, so the bot synthesizes
+  one from the **KXBTCD "Above/Below" hourly ladder**: it pins the strike
+  nearest the period open as the up/down pivot (**YES = above = UP**,
+  **NO = below = DOWN**) and buys the cheap contrarian side.
+- **Kalshi timeframes** — **1 Hour** (the reliably-listed KXBTCD ladder) and
+  **Daily**. (Kalshi has no 15m/4h BTC up/down market — those stay
+  Polymarket-only.)
+- **New Kalshi-branded BTC dashboard** — live price chart + stretch %, status
+  cards (Internet / Binance / Kalshi), strategy status line, and logs. Distinct
+  mint branding from the Polymarket panel.
+- **Kalshi settings** — mean-reversion knobs (risk USD, timeframe, stretch band,
+  take-profit, volume/premium filters, Economic Data Day) alongside the Kalshi
+  API Key ID / RSA key / environment fields.
+- **Single-side execution** — `KalshiLiveExecutor` buys to open and sells to
+  close one directional position (mirrors the Polymarket executor); the straddle
+  Hedge-Sentinel machinery is gone.
+- **Clear Trades** — a new button on the Trades page wipes an exchange's local
+  trade history (with confirmation); Statistics and balance refresh with it.
 
-Earlier, **v1.1.0** reworked the Kalshi panel into a **Kalshi.com-style market
-view**: live game cards grouped by matchup (team names, sport icons, win %,
-volume), a featured-market carousel (`‹ N of M ›` or click any card), team +
-matchup search across the whole scanned set, up to **14 sports series**, and an
-always-on market feed that stays live even while **STOPPED**.
-
-> **Scope note:** the Kalshi panel intentionally shows only tradeable **binary
-> 50/50 sports games**. Multi-outcome prediction markets (e.g. "LeBron's Next
-> Team", elections) are not shown — the box-arbitrage strategy only applies to
-> two-outcome games.
-
-Releases: **[v1.3.4 (latest)](https://github.com/anderson895/SportsBet-Pro/releases/tag/v1.3.4)**
+Releases: **[v1.4.0 (latest)](https://github.com/anderson895/SportsBet-Pro/releases/tag/v1.4.0)**
 · [all releases](https://github.com/anderson895/SportsBet-Pro/releases)
 
 ---
@@ -52,8 +51,9 @@ Releases: **[v1.3.4 (latest)](https://github.com/anderson895/SportsBet-Pro/relea
 ### Development Phases — all complete ✅
 - [x] **Phase 1: Skeleton** — verbatim reuse, `ScopedDatabase`, dual-panel UI shell, stub engines
 - [x] **Phase 2: Polymarket port** — feed / strategy / execution, `PolyEngine`, dashboard + settings, ported tests
-- [x] **Phase 3: Kalshi paper** — client, straddle math + state machine, `KalshiEngine`, Kalshi UI, tests
+- [x] **Phase 3: Kalshi paper** — client, RSA-PSS auth, `KalshiEngine`, Kalshi UI, tests
 - [x] **Phase 4: Kalshi live** — RSA-PSS auth **validated against the real Kalshi production API** (credential check returns balance)
+- [x] **Phase 6: Unify strategy (v1.4.0)** — Kalshi switched to the same Mean-Reversion BTC strategy via the KXBTCD ladder; straddle code removed
 - [x] **Phase 5: Packaging** — PyInstaller build shipped as `SportsBetPro.exe` (see Releases)
 
 ### ✅ Done & verified working
@@ -65,35 +65,39 @@ Releases: **[v1.3.4 (latest)](https://github.com/anderson895/SportsBet-Pro/relea
   "Price to beat" 12PM-ET strike, mean reversion strategy, death-trap filters,
   paper + live modes, position resume; existing Windows Credential Manager
   credentials carry over
-- **Kalshi panel** — always-on market feed (live game cards + probability chart
-  even while STOPPED), scanner that groups markets into Kalshi.com-style game
-  cards, straddle placement (verified: 101 pairs @ 49¢ on a live MLB game),
-  Hedge Sentinel state machine (observed firing on a real 50/50 market),
-  settlement tracking, paper balance accounting
+- **Kalshi panel** — Kalshi-branded BTC dashboard (live price chart + stretch %,
+  status cards, strategy line, logs), the shared mean-reversion engine on the
+  KXBTCD Above/Below ladder, single-side paper + live execution, position
+  resume, paper balance accounting
+- **Kalshi market discovery** — resolves the KXBTCD strike nearest the period
+  open as the up/down pivot; verified live against the production API (e.g.
+  BTC ~$64,718 → `KXBTCD-…-T64699.99`, UP 0.40/0.41 · DOWN 0.59/0.60)
 - **Kalshi live auth** — RSA-PSS SHA256 request signing validated against the
   real production server; PEM auto-saved to `data/kalshi_key.pem` when it
   exceeds the Windows Credential Manager blob size limit
 - **Kalshi 2026 API** — adapted to dollar-string fields (`yes_bid_dollars`,
   `volume_fp`) and `orderbook_fp` (`yes_dollars` / `no_dollars` levels);
   still backwards-compatible with the older integer-cents format
-- **Tests** — 247 passing (ported Polymarket suite + Kalshi tests: straddle
-  math, hedge sentinel, RSA-PSS signing, paper fills, settlement PnL import,
-  startup order reconcile, trade-detail rendering, DB scoping, DoH)
+- **Tests** — 176 passing (shared strategy core + Kalshi market-mapping,
+  single-side live executor, and paper buy→sell engine tests; RSA-PSS signing;
+  DB scoping; DoH)
 - **DoH resolver** — covers `polymarket.com`, `kalshi.com`, `kalshi.co`
 
 ### ✅ Live path exercised
-- **Kalshi live orders** — funded production account; live straddles have been
-  placed, filled, and settled, with realized PnL imported from the exchange's
-  settlement history. The observed bottleneck is **fill rate**, not correctness:
-  the 49¢ maker orders fill only on genuinely 50/50 markets, so completed cycles
-  are rare (widen the scan filters in Settings to cast a broader net).
+- **Kalshi auth + market discovery** — validated against the funded production
+  API (credential check returns balance; the KXBTCD pivot resolves with a live
+  ~50/50 order book).
 - **PyInstaller packaging** — shipped as `SportsBetPro.exe` (see Releases);
   `build.bat` / `SportsBetPro.spec` rebuild it.
 
+> ⚠️ **Kalshi live orders (mean reversion) are implemented against the
+> documented v2 order schema but have not yet been exercised on a funded
+> account.** Verify with a tiny real order before relying on Live mode. Paper
+> mode is fully validated on both panels.
+
 ### 🔜 Next steps
-1. **Fill-rate tuning** — the box-arb edge is proven per cycle (~+1.15%), but
-   entire days can pass with no fills. Widen the scan net in Settings (volume,
-   time-to-close window) and observe the fill rate before scaling risk.
+1. **Kalshi live-order verification** — place one tiny real BTC order to confirm
+   the buy-to-open / sell-to-close path end-to-end before scaling risk.
 2. **Optional code signing** — the `.exe` is unsigned, so Windows SmartScreen
    warns on first run ("More info → Run anyway"). An OV/EV certificate would
    remove the warning for distribution.
@@ -160,85 +164,45 @@ entry stretch becomes ~0.31% on 1-hour markets).
 
 ---
 
-## Strategy 2 — Kalshi: Internal Straddle / Box Arbitrage
+## Strategy 2 — Kalshi: Mean Reversion ("Rubber Band")
 
-From the reference research (`reference/High-Yield Kalshi Trading Strategies`).
-This is a **delta-neutral, market-neutral** strategy — the bot does **not**
-care who wins the game.
+Kalshi runs the **same** rubber-band strategy as Polymarket (above) — the shared
+`strategy/mean_reversion` rules, the same Binance feed, and the same death-trap
+filters. Only the market plumbing differs.
 
-### The idea
-Kalshi is a binary exchange: every market settles to exactly **$1.00** for the
-winning side and **$0.00** for the losing side. On a high-liquidity **~50/50**
-sports market, if you buy **both** YES and NO for a combined price below $1.00,
-you are guaranteed a profit at settlement regardless of the outcome.
+### Synthesizing an Up/Down market
+Kalshi has no single "Up or Down" contract. Instead the **KXBTCD** series
+("Bitcoin price Above/Below", hourly) is a dense ladder of "BTC above $STRIKE at
+the hour's end" markets (~$100 apart). The bot builds an up/down market by
+pinning the strike nearest the period **open** ("price to beat") as the pivot:
+
+```
+YES (above the pinned strike) = UP        NO (below) = DOWN
+```
+
+So when BTC is pumped above the open the bot buys the cheap **NO (= DOWN)**
+side; when dumped, the cheap **YES (= UP)** side — the identical mean-reversion
+entry, assembled from a threshold ladder. Discovery is verified live
+(`execution/kalshi_market.py`).
+
+### Entry / exit / filters
+Identical to Strategy 1: enter on a stretch inside the entry window when the
+contrarian contract is cheap (0.15–0.25), take profit at +100%, stop at −50%,
+force-exit before settlement, one trade per period, with the volume /
+Coinbase-premium / Economic-Data-Day vetoes. Thresholds scale by timeframe
+(the 1.5% daily entry stretch becomes ~0.31% on the 1-hour market).
+
+### Timeframes
+Kalshi's clean up/down ladder is **hourly** (`KXBTCD`), so **1 Hour** is the
+default and the reliably-tradeable timeframe; **Daily** is offered when listed.
+Kalshi has no 15m/4h BTC up/down market, so those remain Polymarket-only.
 
 ### Execution
-The bot places two **post-only resting limit BUY** orders on the same market:
-
-```
-BUY YES @ 49¢   +   BUY NO @ 49¢     →   pair cost = 98¢
-one side settles at $1.00            →   payout    = 100¢
-```
-
-- **`post_only` is essential** — it forces maker orders. If they would cross
-  immediately (become taker), Kalshi rejects them. Taker fees would make the
-  strategy unprofitable.
-- Contract count = `floor(risk_usd / 0.98)`
-
-### The fee math
-Kalshi's fee per order (rounded **up** to the next cent):
-
-```
-fee = ceil( 0.0175 · C · P · (1 − P) )        [C = contracts, P = price in $]
-
-Per leg @ 49¢:   0.0175 · 0.49 · 0.51 ≈ $0.0044/contract
-Round-trip pair: ≈ $0.0088
-Net profit/pair: 100¢ − 98¢ − 0.88¢ ≈ +1.13¢   →  ~+1.15% per completed cycle
-```
-
-During Kalshi's 0% maker-fee promotional windows, the edge rises to ~+2%.
-
-### The Hedge Sentinel (single-sided-fill protection)
-The one real risk is **execution risk** — one leg fills (say YES @ 49¢) but the
-market moves before the NO leg fills, leaving a directional bet. A pure state
-machine (`strategy/straddle.py`) guards against this:
-
-```
-RESTING_BOTH → ONE_FILLED(t0) → LOCKED                    (both filled — arb locked)
-                              ↘ HEDGING → HEDGED           (scratch locked ≈ breakeven)
-                                       ↘ UNHEDGED_HOLD     (hedge failed — held to settlement)
-             → CANCELLED                                   (no fills — market drifted)
-```
-
-The Sentinel fires when a single side has been filled for longer than the
-**timeout** (default 90s) **or** the unfilled side's ask runs above the
-**hedge cap** (default 51¢). It then cancels the lagging resting order and
-places an aggressive crossing BUY (taker) on the missing side up to 51¢:
-
-- **Hedge fills** → `HEDGED`: pair cost ≤ 49¢ + 51¢ = 100¢ for a 100¢ payout →
-  loss ≈ fees only (a "scratch")
-- **Hedge can't fill** after N retries → `UNHEDGED_HOLD`: the bot holds the
-  single side to settlement (worst case −49¢/contract) and records the final
-  PnL when the game resolves
-
-### Risk profile
-- **Structural risk: ~0%** — you own both sides of a binary market
-- **Real-world risk: ~1–2% max** — bounded by the Hedge Sentinel's scratch cost
-  or a rare unhedged hold. This is the ~2% figure from the reference backtest.
-
-### Market selection
-The scanner discovers live sports **series** (baseball, basketball, football,
-hockey, soccer, and more — up to 14) and filters for markets where both YES and
-NO mids sit inside the **48–52¢ band**, with sufficient **volume** and a sane
-**time-to-close** window (avoids late-game markets that move violently).
-Genuine 49/49 markets are rare, so the scanner may sit idle — that is by design,
-not a bug.
-
-> **Reference backtest (from the PDF):** starting $2,000, box arbitrage on the
-> sports genre, ~15 turnovers/month at +1.14%/cycle compounded to ~$15,975 over
-> 12 months (+698.8%) in the 100%-compounding model. Real results depend on
-> fill quality and available 50/50 liquidity; this bot's Paper mode lets you
-> observe the actual fill rate before risking capital.
+`KalshiLiveExecutor` holds **one directional position** at a time — buys to open
+(post-only maker on the mapped yes/no side) and sells the same side to close
+(crossing the book so the exit fills). Share prices come from the pinned
+market's live order book. This is directional (it can lose); the filters exist
+to avoid trending days.
 
 ---
 
@@ -260,11 +224,11 @@ Requirements: Windows 10/11, an internet connection.
 
 | Test file | Coverage |
 |---|---|
-| `test_mean_reversion.py`, `test_timeframes.py`, `test_filters.py`, `test_polymarket.py`, `test_paper_e2e.py`, `test_resume.py` | Full Polymarket side (ported, proven suite) |
-| `test_straddle_math.py` | Kalshi fees (ceil per order), pair PnL @49/49, scratch @49+51, sizing, candidate filter |
-| `test_hedge_sentinel.py` | `StraddleCycle` state machine — all transitions incl. sentinel triggers and restart persistence |
+| `test_mean_reversion.py`, `test_timeframes.py`, `test_filters.py`, `test_polymarket.py`, `test_paper_e2e.py`, `test_resume.py` | Shared strategy core + Polymarket side (proven suite) |
+| `test_kalshi_market.py` | KXBTCD discovery: nearest-strike pivot, this-period settlement, UP/DOWN↔yes/no mapping, share-price reads |
+| `test_kalshi_live.py` | `KalshiLiveExecutor` — buy opens the mapped side, sell closes the held side, dollars→cents |
+| `test_kalshi_engine.py` | Full paper buy→sell through `KalshiEngine` (entry gating, profit target, stop loss, one-trade-per-period) |
 | `test_kalshi_auth.py` | RSA-PSS SHA256 signing (in-test keypair, verified with the public key) |
-| `test_kalshi_paper.py` | Simulated fills from canned orderbook snapshots |
 | `test_db_scoping.py` | Isolation of the two exchanges in a single `bot.db` |
 | `test_netdns.py` | DoH resolver (polymarket.com + kalshi.com override) |
 
@@ -281,13 +245,14 @@ credentials in Windows Credential Manager carry over (same service name).
 2. Kalshi panel → Settings → Trading Mode: **Live**
 3. Paste the API Key ID; paste the full PEM text **or** enter the .pem file path.
 4. Environment: use **Demo** (demo.kalshi.co, practice money) before Production.
-5. Save Settings → credentials are verified via `GET /portfolio/balance`.
-6. START BOT — it auto-discovers sports series tickers on first run (editable
-   in Settings).
+5. Pick the **Market Timeframe** (1 Hour recommended) and Risk in USD.
+6. Save Settings → credentials are verified via `GET /portfolio/balance`.
+7. START BOT — it discovers the current KXBTCD Above/Below market automatically.
 
-> **Paper mode first.** Kalshi paper mode uses **real public market data** with
-> simulated fills, so the full scanner + Hedge Sentinel are exercised with no
-> real money.
+> **Paper mode first.** Kalshi paper mode estimates the share price from the BTC
+> stretch (same model as Polymarket paper), so the full strategy runs with no
+> real money. Live Kalshi orders are new in v1.4.0 — verify with a tiny real
+> order first.
 
 > **Note on secrets:** the API Key ID is stored in Windows Credential Manager.
 > A large RSA key that exceeds its size limit is written to
@@ -311,13 +276,13 @@ build venv, and do not build with Python 3.10.0.
 | Polymarket/Kalshi card shows Disconnected | A built-in DoH resolver (`src/core/netdns.py`) bypasses ISP DNS poisoning of `*.polymarket.com` and `*.kalshi.com` |
 | App won't open | Run from a terminal to see the error: `.\venv\Scripts\python.exe -m src.main` |
 | Runtime errors | Check **`data\app.log`** — every error has a full traceback |
-| Kalshi scanner finds nothing | Normal — exact 49/49 markets are rare. Widen the band or lower the volume threshold in Settings, or wait for game nights |
-| `UNHEDGED_HOLD` alert | The hedge couldn't fill — one side is held to settlement (max loss = entry cost). The bot watches for settlement and records the PnL |
+| Kalshi bot never trades | Normal — it waits for a genuine BTC stretch inside the entry window. The strategy status line names the exact condition it is waiting for |
+| `WAITING — resolving Kalshi BTC market…` | The bot is discovering the KXBTCD strike nearest the period open; it clears once the order book loads. `No open KXBTCD…` → switch the timeframe to **1 Hour** |
 
 ## Disclaimer
 
 This software places real-money trades when Live mode is enabled. Use Paper mode
-until you have validated the strategy yourself. The `UNHEDGED_HOLD` scenario
-carries settlement/directional risk, and the "guaranteed" arbitrage depends on a
-successful double-sided fill. Verifying that Polymarket/Kalshi are legal in your
-jurisdiction is your responsibility.
+until you have validated the strategy yourself. Mean reversion is a
+**directional** strategy — it can and will lose on trending days; the death-trap
+filters reduce but do not eliminate that risk. Verifying that Polymarket/Kalshi
+are legal in your jurisdiction is your responsibility.

@@ -180,6 +180,8 @@ class ExchangePanel(QWidget):
                      if hasattr(engine, "sync_fills_from_kalshi") else None),
         )
         self.stats = StatsPage(db, currency)
+        # Clearing the trade history must also refresh stats + the balance card
+        self.trades.cleared.connect(self._on_trade)
 
         # Ang page nav (Dashboard/Settings/...) ay SHARED na sa main window
         # (nasa taas kasama ang brand) — hawak lang ng panel ang stack nito

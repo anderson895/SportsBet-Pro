@@ -28,7 +28,7 @@ from src.ui.loading_overlay import LoadingOverlay
 from src.ui.poly_dashboard import PolyDashboard
 from src.ui.poly_settings import PolySettingsPage
 
-APP_VERSION = "1.3.4"
+APP_VERSION = "1.4.0"
 
 TF_LABELS = {"daily": "Daily", "4h": "4 Hours", "1h": "1 Hour", "15m": "15 Minutes"}
 
@@ -75,8 +75,8 @@ class MainWindow(QMainWindow):
             db=kalshi_db,
             dashboard=kalshi_dash,
             settings_page=kalshi_settings,
-            strategy_name="Internal Straddle (Box Arb)",
-            market_text="Kalshi Sports 50/50",
+            strategy_name="Mean Reversion",
+            market_text="BTC (Binance) → Kalshi",
             currency="USD",
             risk_setting=("risk_usd", 100.0),
             about_title=f"Help & Documentation  ·  v{APP_VERSION}",
@@ -99,14 +99,17 @@ class MainWindow(QMainWindow):
         poly_settings.modeSaved.connect(lambda _m: self._refresh_poly_labels())
         poly_settings.liveBalanceChecked.connect(poly_dash.set_live_balance)
 
-        # ---- Kalshi-specific wiring -------------------------------------
-        kalshi_engine.marketsScanned.connect(kalshi_dash.update_markets)
-        kalshi_engine.marketTick.connect(kalshi_dash.update_market_tick)
-        kalshi_dash.focusRequested.connect(kalshi_engine.set_chart_focus)
+        # ---- Kalshi-specific signal wiring (chart, stretch — same as poly) --
+        kalshi_engine.priceUpdated.connect(kalshi_dash.update_price)
+        kalshi_engine.historyLoaded.connect(kalshi_dash.load_history)
+        kalshi_engine.klineUpdated.connect(kalshi_dash.update_candle)
+        kalshi_engine.rangeHistoryLoaded.connect(kalshi_dash.load_range_history)
+        kalshi_dash.rangeRequested.connect(kalshi_engine.fetch_range_history)
+        kalshi_engine.stretchUpdated.connect(kalshi_dash.update_stretch)
         kalshi_engine.strategyStatus.connect(kalshi_dash.set_strategy_status)
-        kalshi_engine.straddleStatus.connect(kalshi_dash.set_straddle_status)
         kalshi_engine.liveBalance.connect(kalshi_dash.set_live_balance)
         kalshi_settings.modeSaved.connect(self.kalshi_panel._on_mode)
+        kalshi_settings.modeSaved.connect(lambda _m: self._refresh_kalshi_labels())
         kalshi_settings.liveBalanceChecked.connect(kalshi_dash.set_live_balance)
 
         # ---- Connection status: isang monitor (nasa poly engine),
@@ -201,6 +204,7 @@ class MainWindow(QMainWindow):
         self._switch(start_tab)
         self._select_page(0)
         self._refresh_poly_labels()
+        self._refresh_kalshi_labels()
 
         # ---- Startup gate: huwag ipagamit hangga't hindi pa handa ---------
         self._loading = LoadingOverlay(
@@ -209,14 +213,12 @@ class MainWindow(QMainWindow):
                 ("binance", "Connecting to Binance price feed"),
                 ("polymarket", "Connecting to Polymarket"),
                 ("kalshi", "Connecting to Kalshi"),
-                ("markets", "Loading live sports markets"),
             ],
             parent=container,
         )
-        # Tinatapos ng connection monitor at ng unang market scan ang mga
-        # hakbang; may sariling timeout ang overlay kung may hindi tumugon.
+        # Tinatapos ng connection monitor ang mga hakbang; may sariling
+        # timeout ang overlay kung may hindi tumugon.
         poly_engine.connectionChanged.connect(self._on_startup_connection)
-        kalshi_engine.marketsScanned.connect(self._on_startup_markets)
 
     # --------------------------------------------------------- startup gate
     # (sinusundan mismo ng overlay ang sukat ng parent — tingnan ang
@@ -230,10 +232,6 @@ class MainWindow(QMainWindow):
         offline ang isang service.
         """
         self._loading.mark_done(name)
-
-    def _on_startup_markets(self, rows: list) -> None:
-        # Kahit walang laman: nakausap na natin ang Kalshi, tapos na ang scan
-        self._loading.mark_done("markets")
 
     @staticmethod
     def _exchange_accent(index: int) -> str:
@@ -283,6 +281,12 @@ class MainWindow(QMainWindow):
         tf = str(self.poly_panel._db.get_setting("market_timeframe", "daily"))
         self.poly_panel.bottom.set_info_column("Timeframe", TF_LABELS.get(tf, tf))
         self.poly_panel.refresh_config_labels()
+
+    def _refresh_kalshi_labels(self) -> None:
+        """Timeframe column sa kalshi bottom bar — mula sa saved settings."""
+        tf = str(self.kalshi_panel._db.get_setting("market_timeframe", "1h"))
+        self.kalshi_panel.bottom.set_info_column("Timeframe", TF_LABELS.get(tf, tf))
+        self.kalshi_panel.refresh_config_labels()
 
     # --------------------------------------------------------------- helpers
 

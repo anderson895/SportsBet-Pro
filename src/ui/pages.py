@@ -9,12 +9,13 @@ import datetime as dt
 from typing import Callable, Optional
 
 import qtawesome as qta
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QMessageBox,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -81,6 +82,8 @@ def local_datetime(ts: str) -> str:
 
 
 class TradesPage(QWidget):
+    cleared = Signal()  # emitted after the trade history is wiped
+
     def __init__(self, db: ScopedDatabase, currency: str = "USD",
                  on_sync: Optional[Callable[[], None]] = None) -> None:
         super().__init__()
@@ -123,6 +126,17 @@ class TradesPage(QWidget):
             sync_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             sync_btn.clicked.connect(on_sync)
             head.addWidget(sync_btn)
+
+        clear_btn = QPushButton("  Clear Trades")
+        clear_btn.setIcon(qta.icon("fa6s.trash-can", color=theme.MUTED))
+        clear_btn.setToolTip(
+            "Permanently delete this exchange's trade history from the local "
+            "database. Does not touch your exchange account."
+        )
+        clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        clear_btn.clicked.connect(self._clear_trades)
+        head.addWidget(clear_btn)
+
         self.status = QLabel("")
         self.status.setProperty("muted", True)
 
@@ -144,6 +158,29 @@ class TradesPage(QWidget):
         # trade_details ay gumagamit ng mga helper mula sa module na ito)
         from src.ui.trade_details import TradeDetailDialog
         TradeDetailDialog(self._db, item.text(), self._currency, self).exec()
+
+    def _clear_trades(self) -> None:
+        """Wipe this exchange's local trade history (with confirmation)."""
+        count = len(self._db.recent_trades(limit=100000))
+        if count == 0:
+            self.set_status("No trades to clear.", theme.MUTED)
+            return
+        reply = QMessageBox.question(
+            self,
+            "Clear trade history?",
+            f"Permanently delete all {count} trade record(s) for this "
+            "exchange from the local database?\n\nThis only clears the "
+            "local history and statistics — it does NOT cancel or change "
+            "anything on your exchange account. It cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self._db.clear_trades()
+        self.reload()
+        self.set_status(f"Cleared {count} trade record(s).", theme.MUTED)
+        self.cleared.emit()
 
     def set_status(self, text: str, color: str = theme.MUTED) -> None:
         self.status.setText(text)

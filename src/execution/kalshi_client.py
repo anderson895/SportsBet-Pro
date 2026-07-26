@@ -166,38 +166,42 @@ class KalshiClient:
         side: str,                 # 'yes' | 'no'
         count: int,
         price_cents: int,
+        action: str = "buy",       # 'buy' (open) | 'sell' (close)
         post_only: bool = True,
         client_order_id: Optional[str] = None,
     ) -> dict:
-        """Limit BUY order sa napiling side. Ibinabalik ang order dict.
+        """Directional limit order on one side. Returns the order dict.
 
-        Kalshi V2 orders API (POST /portfolio/events/orders) — lahat ay
-        ini-express mula sa YES perspective:
-          - BUY YES @ p¢  -> side="bid",  price = p/100
-          - BUY NO  @ p¢  -> side="ask",  price = (100 - p)/100
-            (ang pag-benta ng YES @ (100-p)¢ ay katumbas ng pagbili ng NO @ p¢)
-        Kaya gumagana ito para sa parehong resting maker legs AT sa hedge:
-        ang "ask" leg ay nagsa-scratch/flatten ng anumang hawak na YES.
+        Kalshi v2 schema (POST /portfolio/orders): the order is expressed
+        directly in terms of the ``side`` you trade and its own price:
+          - BUY  YES @ p¢ -> action="buy",  side="yes", yes_price=p  (open UP)
+          - BUY  NO  @ p¢ -> action="buy",  side="no",  no_price=p   (open DOWN)
+          - SELL YES @ p¢ -> action="sell", side="yes", yes_price=p  (close UP)
+          - SELL NO  @ p¢ -> action="sell", side="no",  no_price=p   (close DOWN)
+
+        The mean-reversion strategy holds ONE side at a time, so we buy to open
+        and sell the SAME side to close — no straddle/complement gymnastics.
+
+        NOTE: LIVE order placement is implemented against the documented v2
+        schema but has not been exercised against a funded account here; verify
+        with a tiny real order before relying on it (see README live checks).
         """
         side = side.lower()
-        if side == "yes":
-            v2_side = "bid"
-            v2_price_cents = price_cents
-        else:  # 'no' -> sell YES @ (100 - price)
-            v2_side = "ask"
-            v2_price_cents = 100 - price_cents
+        action = action.lower()
+        price_key = "yes_price" if side == "yes" else "no_price"
         body = {
             "ticker": ticker,
             "client_order_id": client_order_id or str(uuid.uuid4()),
-            "side": v2_side,
-            "count": f"{int(count):.2f}",           # FixedPointCount, hal. "10.00"
-            "price": f"{v2_price_cents / 100:.2f}",  # FixedPointDollars, hal. "0.49"
+            "action": action,
+            "side": side,
+            "count": int(count),
+            "type": "limit",
+            price_key: int(price_cents),
             "time_in_force": "good_till_canceled",
-            "self_trade_prevention_type": "taker_at_cross",
             "post_only": post_only,
         }
         data = await self._request(
-            "POST", "/portfolio/events/orders", json_body=body, auth=True
+            "POST", "/portfolio/orders", json_body=body, auth=True
         )
         return data.get("order", data)
 
@@ -208,9 +212,8 @@ class KalshiClient:
         return data.get("order", data)
 
     async def cancel_order(self, order_id: str) -> dict:
-        # V2 cancel endpoint (matches create endpoint family)
         return await self._request(
-            "DELETE", f"/portfolio/events/orders/{order_id}", auth=True
+            "DELETE", f"/portfolio/orders/{order_id}", auth=True
         )
 
     async def get_resting_orders(

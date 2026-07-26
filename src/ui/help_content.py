@@ -85,13 +85,10 @@ SECTIONS: tuple[Section, ...] = (
         "  CANCELLED — withdrawn before filling. Grey.\n\n"
         "A row is written when the order is PLACED, so RESTING rows are\n"
         "normal and expected.\n\n"
-        "Double-click any row to open the full trade details: decoded\n"
-        "matchup, how many YES vs NO contracts, total cost, and net P&L.\n\n"
-        "'Sync from exchange' (Kalshi) imports the real fill history and\n"
-        "realised P&L straight from your account — useful if the app was\n"
-        "restarted mid-trade. It is safe to click repeatedly.\n\n"
+        "Double-click any row to open the full trade details: side (UP or\n"
+        "DOWN), entry and exit price, size, and net P&L.\n\n"
         "Times are shown in your local timezone.",
-        ("trades", "status", "resting", "filled", "pnl", "sync", "history"),
+        ("trades", "status", "resting", "filled", "pnl", "history"),
     ),
     Section(
         "Where credentials are stored",
@@ -107,116 +104,79 @@ SECTIONS: tuple[Section, ...] = (
 
     # ----------------------------------------------------------- KALSHI
     Section(
-        "Kalshi — how Box Arbitrage works",
+        "Kalshi — how Mean Reversion works",
         KALSHI,
-        "The bot buys BOTH sides of the same market at the same time:\n\n"
-        "    BUY 10 YES @ 49¢   =  $4.90\n"
-        "    BUY 10 NO  @ 49¢   =  $4.90\n"
-        "                          ------\n"
-        "                   total  $9.80\n\n"
-        "Exactly one side must settle at $1.00, so 10 pairs return $10.00 —\n"
-        "no matter who wins. Kalshi automatically nets matched YES+NO into\n"
-        "the $1.00 credit, often before the game even ends.\n\n"
-        "Gross profit is 2¢ per pair. After maker fees the net is roughly\n"
-        "+1.1% per completed cycle.\n\n"
-        "This is NOT a bet on a team. The market name (e.g. …CHCPIT-CHC)\n"
-        "only identifies which side is 'YES' — the bot holds both.",
-        ("straddle", "box arb", "arbitrage", "strategy", "how it works",
-         "both sides", "yes no"),
+        "Kalshi runs the SAME 'rubber band' strategy as Polymarket — only\n"
+        "the venue differs. Within a fixed period, when BTC stretches far\n"
+        "from the period's opening price, it often snaps back.\n\n"
+        "Kalshi has no single 'Up or Down' market, so the bot builds one\n"
+        "from the KXBTCD 'Above/below' ladder: it pins the strike nearest\n"
+        "the period open as the up/down pivot (YES = above = UP, NO = below\n"
+        "= DOWN). It then buys the cheap CONTRARIAN side — DOWN when BTC is\n"
+        "pumped, UP when dumped — and sells when price reverts.\n\n"
+        "This is directional: it can lose. Every filter below exists to\n"
+        "avoid entering on days when price trends instead of reverting.",
+        ("mean reversion", "rubber band", "strategy", "btc", "bitcoin",
+         "how it works", "above below", "kxbtcd", "up down"),
+    ),
+    Section(
+        "Kalshi — entry conditions",
+        KALSHI,
+        "All of these must be true at the same time, or no trade is taken:\n\n"
+        "  • Inside the entry window (for 1h markets: 10–30 minutes into\n"
+        "    the period).\n"
+        "  • Stretch from the period open is at least the Entry Stretch\n"
+        "    Band, and no more than the Death Trap Limit.\n"
+        "  • The contrarian contract is cheap enough (0.15–0.25) for the\n"
+        "    payoff to be worthwhile.\n"
+        "  • Recent volume is not spiking above the Volume Spike Filter.\n"
+        "  • Coinbase premium is within the Coinbase Premium Filter.\n"
+        "  • Today is not marked as an Economic Data Day.\n\n"
+        "The Logs page shows exactly which condition blocked an entry, for\n"
+        "example 'stretch +0.01% < 0.31% minimum'. Seeing many of these\n"
+        "means the market is quiet, not that the bot is broken.",
+        ("entry", "conditions", "filters", "why no trade", "blocked",
+         "stretch", "window"),
     ),
     Section(
         "Kalshi — why the bot sits idle",
         KALSHI,
-        "The bot places post-only (maker) orders. It waits in the order\n"
-        "book instead of paying the spread — that is where the profit comes\n"
-        "from.\n\n"
-        "Bidding 49¢ + 49¢ = 98¢ for a $1.00 payout means somebody must\n"
-        "sell to you at those prices. In slow pre-game markets that can\n"
-        "take a long time, and many cycles end in CANCEL after the 15\n"
-        "minute no-fill timeout.\n\n"
-        "Long idle periods are normal and correct, not a bug. If the bot\n"
-        "chased the market instead, buying immediately would cost about\n"
-        "104¢ for a $1.00 payout — a guaranteed loss.",
-        ("idle", "waiting", "no fills", "slow", "nothing happening",
-         "maker", "post only"),
-    ),
-    Section(
-        "Kalshi — Hedge Sentinel (the real risk control)",
-        KALSHI,
-        "The only dangerous outcome is a one-sided fill: if YES fills and\n"
-        "NO does not, you are holding a genuine bet on the game.\n\n"
-        "The Hedge Sentinel handles this:\n"
-        "  • After 90 seconds single-sided, it acts.\n"
-        "  • It buys the missing side at up to 51¢.\n"
-        "  • 49¢ + 51¢ = $1.00 → breakeven; you lose only fees, not the\n"
-        "    game outcome.\n"
-        "  • If it cannot fill, the cycle becomes UNHEDGED_HOLD, an ERROR\n"
-        "    is logged and an alert is shown. Only then is real\n"
-        "    directional risk being carried.\n\n"
-        "Both the timeout and the maximum hedge price are configurable in\n"
-        "Settings.",
-        ("hedge", "sentinel", "risk", "one sided", "single sided",
-         "unhedged", "protection", "scratch"),
+        "The bot only trades when BTC genuinely stretches away from the\n"
+        "period open inside the entry window. Most of the time price is\n"
+        "quiet and no condition is met — so it waits.\n\n"
+        "Long idle periods are normal and correct, not a bug. Forcing a\n"
+        "trade with no real stretch would just be a coin-flip bet on BTC.\n"
+        "The Logs page names the exact condition it is waiting for.",
+        ("idle", "waiting", "slow", "nothing happening", "no trade"),
     ),
     Section(
         "Kalshi — settings reference",
         KALSHI,
         "Trading Mode — Paper (simulated) or Live (real money).\n\n"
+        "Market Timeframe — which Kalshi BTC Above/Below market to trade:\n"
+        "1 Hour (the reliably-listed KXBTCD ladder) or Daily. Strategy\n"
+        "timings and thresholds scale automatically, so the 1.5% daily\n"
+        "stretch becomes about 0.31% on 1-hour markets.\n\n"
         "Environment — Production (kalshi.com) or Demo (practice money at\n"
         "demo.kalshi.co).\n\n"
         "Kalshi API Key ID / RSA Private Key — from kalshi.com → Account\n"
         "Settings → API Keys. Paste the PEM text or give a file path.\n\n"
-        "Risk Per Straddle (USD) — money committed to ONE straddle, both\n"
-        "sides combined. $10 buys about 10 pairs at 49¢+49¢.\n\n"
-        "Entry Price — the resting bid on EACH side. Default 49¢. Lower is\n"
-        "more profitable but fills less often; keep it near 49¢. Setting it\n"
-        "far from 50¢ (e.g. 20¢) means it will essentially never fill.\n\n"
-        "Hedge Sentinel — max hedge price — default 51¢, giving breakeven.\n\n"
-        "Hedge Sentinel — single-sided timeout — default 90 seconds.\n\n"
-        "Minimum Market Volume — only trade games with at least this much\n"
-        "volume. Higher is safer and more liquid; lower surfaces more\n"
-        "candidates.\n\n"
-        "Skip markets closing sooner than — avoids the chaotic final\n"
-        "minutes of a game. Default 30 minutes.\n\n"
-        "Skip markets closing later than — ignores games still hours away.\n"
-        "Default 24 hours.\n\n"
-        "Sports to Trade — which leagues to scan. Leave all unchecked to\n"
-        "auto-discover whatever is active.\n\n"
+        "Risk Per Trade (USD) — money committed to one trade.\n\n"
+        "Entry Stretch Band — minimum move from the open before buying;\n"
+        "default 1.5% (daily-calibrated).\n\n"
+        "Max Stretch / Death Trap Limit — skip if price has moved MORE than\n"
+        "this; that suggests a trending day, not a reverting one.\n\n"
+        "Take Profit — sell when the position is up this much; default\n"
+        "100%.\n\n"
+        "Volume Spike Filter — block entry when recent volume is this many\n"
+        "times the baseline (sign of institutional momentum).\n\n"
+        "Coinbase Premium Filter — block entry when the Coinbase-vs-Binance\n"
+        "premium is too large (sign of aggressive US spot buying).\n\n"
+        "Economic Data Day — tick to block ALL entries today (Fed meeting,\n"
+        "CPI, and similar trend days).\n\n"
         "Paper Starting Balance — the pretend balance used in Paper mode.",
         ("settings", "fields", "configuration", "risk", "entry price",
-         "volume", "sports"),
-    ),
-    Section(
-        "Kalshi — fees and the actual maths",
-        KALSHI,
-        "Kalshi's fee per leg is:\n\n"
-        "    fee = ceil( 0.0175 × contracts × P × (1 − P) )   in cents\n\n"
-        "At 49¢ this is about 0.44¢ per contract per leg, so a pair costs\n"
-        "roughly 0.9¢ in fees against 2¢ of gross profit.\n\n"
-        "Worked example from a real completed cycle:\n"
-        "    28 pairs traded, cost $27.44\n"
-        "    settlement            $28.00\n"
-        "    gross profit          +$0.56\n"
-        "    fees paid             −$0.2451\n"
-        "    net                   +$0.3149\n\n"
-        "The margin is thin, which is exactly why the bot must stay a\n"
-        "maker: a single taker fill wipes out several winning cycles.",
-        ("fees", "maths", "math", "profit", "economics", "example",
-         "calculation"),
-    ),
-    Section(
-        "Kalshi — three-way markets (soccer)",
-        KALSHI,
-        "Soccer has three outcomes: home win, DRAW, away win. Cards for\n"
-        "these games therefore show three rows, and the percentages add up\n"
-        "to 100% across all three.\n\n"
-        "Each individual market is still binary — 'does Tijuana win?' is\n"
-        "yes or no — so Box Arbitrage works normally.\n\n"
-        "In the featured card the NO side of a three-way market is labelled\n"
-        "'Not <team>', because NO means 'draw OR the opponent', not simply\n"
-        "the opponent.",
-        ("soccer", "football", "draw", "tie", "three way", "3-way",
-         "percentages"),
+         "timeframe", "environment", "api key"),
     ),
 
     # ------------------------------------------------------ POLYMARKET
@@ -322,23 +282,20 @@ SECTIONS: tuple[Section, ...] = (
     Section(
         "Troubleshooting — Kalshi messages",
         KALSHI,
-        "'Market moved … 49¢ bid would cross the book; will retry next scan'\n"
-        "  → Harmless. Between the scan and the order the price moved, so a\n"
-        "    post-only order would have become a taker and was skipped. The\n"
-        "    bot retries with the next candidate.\n\n"
-        "'Straddle cancelled … no fills after 15min'\n"
-        "  → Normal maker behaviour. Nobody traded against the resting\n"
-        "    orders, so they were withdrawn and the bot moved on.\n\n"
-        "Balance dropped, then came back higher\n"
-        "  → Kalshi reserves collateral while orders rest or one leg is\n"
-        "    filled. When the pair nets to $1.00 the collateral returns\n"
-        "    along with the profit. A dip mid-cycle is not a loss.\n\n"
-        "Statistics show $0.00 even though trades completed\n"
-        "  → Click 'Sync from exchange' on the Trades page. Fill history\n"
-        "    alone does not contain realised profit; the sync also pulls it\n"
-        "    from your positions.",
-        ("errors", "cross", "cancelled", "balance dropped", "reserved",
-         "statistics zero", "troubleshooting"),
+        "'WAITING — resolving Kalshi BTC market…'\n"
+        "  → The bot is discovering the KXBTCD above/below strike nearest\n"
+        "    the period open. It clears once the order book loads.\n\n"
+        "'WAITING — no live order book data yet'\n"
+        "  → The chosen strike has no quotes yet this tick; it retries every\n"
+        "    few seconds. Common right after a period rollover.\n\n"
+        "'No open KXBTCD above/below markets found'\n"
+        "  → Kalshi has not listed the BTC ladder for this period yet, or\n"
+        "    the Daily timeframe is unavailable — switch to 1 Hour.\n\n"
+        "Balance shows '…' in Live mode\n"
+        "  → A transient network hiccup; the balance loop retries every\n"
+        "    10 seconds and refreshes every 60.",
+        ("errors", "no market", "waiting", "balance", "order book",
+         "troubleshooting"),
     ),
     Section(
         "Safety notes",
@@ -349,9 +306,9 @@ SECTIONS: tuple[Section, ...] = (
         "• Pressing STOP BOT pauses trading but does NOT cancel orders\n"
         "  already resting on the exchange. Cancel those on kalshi.com or\n"
         "  polymarket.com if you do not want them.\n\n"
-        "• Closing the app while a straddle is open leaves the real orders\n"
-        "  live on the exchange. Restart and press START to resume\n"
-        "  monitoring them, including the Hedge Sentinel.\n\n"
+        "• Closing the app while a position is open leaves it on the\n"
+        "  exchange. Restart and press START to resume monitoring it; the\n"
+        "  open position is restored if still within the same period.\n\n"
         "• Never share your private keys or PEM files with anyone.",
         ("safety", "warning", "stop", "cancel orders", "risk", "closing"),
     ),
