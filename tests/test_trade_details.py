@@ -6,7 +6,11 @@ kailanman ay hindi dapat mag-crash sa hindi inaasahang hugis.
 """
 import unittest
 
-from src.ui.trade_details import parse_ticker, summarise
+from src.ui.trade_details import (
+    parse_ticker,
+    summarise,
+    summarise_directional,
+)
 
 
 def _row(side, action="BUY", price=0.49, size=0.0, pnl=None):
@@ -56,6 +60,39 @@ class SummariseTest(unittest.TestCase):
     def test_empty_rows(self) -> None:
         got = summarise([])
         self.assertEqual((got["yes"], got["no"], got["cost"]), (0, 0, 0.0))
+        self.assertIsNone(got["pnl"])
+
+
+class SummariseDirectionalTest(unittest.TestCase):
+    """Polymarket mean-reversion: isang panig (UP/DOWN), entry + exit.
+
+    Ang lumang Kalshi na summarise() ay YES/NO lang ang binibilang, kaya
+    0/0 ang lumalabas para sa DOWN — dito naaayos iyon.
+    """
+
+    def test_directional_buy_then_sell_with_profit(self) -> None:
+        # Totoong Polymarket trade: BUY DOWN @ 0.25, SELL @ 0.27 -> +8.86
+        rows = [
+            _row("DOWN", action="BUY", price=0.25, size=100.0),
+            _row("DOWN", action="SELL", price=0.27, size=108.86, pnl=8.86),
+        ]
+        got = summarise_directional(rows)
+        self.assertEqual(got["side"], "DOWN")
+        self.assertEqual(got["contracts"], 400)      # 100 / 0.25
+        self.assertAlmostEqual(got["avg"], 0.25, places=2)
+        self.assertAlmostEqual(got["cost"], 100.0, places=2)
+        self.assertAlmostEqual(got["pnl"], 8.86, places=2)
+
+    def test_open_directional_trade_has_no_pnl(self) -> None:
+        got = summarise_directional(
+            [_row("UP", action="BUY", price=0.40, size=40.0)])
+        self.assertEqual(got["side"], "UP")
+        self.assertIsNone(got["pnl"])
+
+    def test_empty_rows(self) -> None:
+        got = summarise_directional([])
+        self.assertEqual(got["side"], "")
+        self.assertEqual((got["contracts"], got["cost"]), (0, 0.0))
         self.assertIsNone(got["pnl"])
 
 

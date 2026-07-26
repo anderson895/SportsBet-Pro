@@ -128,14 +128,40 @@ def summarise(rows: list) -> dict:
             "cost": round(cost, 2), "pnl": pnl}
 
 
+def summarise_directional(rows: list) -> dict:
+    """Buuin ang isang DIRECTIONAL na trade (Polymarket mean reversion).
+
+    Iba sa Kalshi straddle: ISANG panig lang ang binibili (UP o DOWN),
+    may entry (BUY) at exit (SELL). Mahalaga ang panalo — taya ito, hindi
+    box-arbitrage. Ibinabalik: side, contracts, avg entry, cost, pnl.
+    """
+    side = ""
+    contracts = cost = 0.0
+    pnl: Optional[float] = None
+    for r in rows:
+        if r["action"] == "BUY" and r["price"]:
+            side = side or r["side"]
+            contracts += r["size"] / r["price"]
+            cost += r["size"]
+        if r["pnl"] is not None:
+            pnl = (pnl or 0.0) + r["pnl"]
+    avg = (cost / contracts) if contracts else 0.0
+    return {"side": side, "contracts": round(contracts),
+            "avg": round(avg, 2), "cost": round(cost, 2), "pnl": pnl}
+
+
 class TradeDetailDialog(QDialog):
     """Lahat ng aktibidad sa ISANG market: legs, laki, at totoong PnL."""
 
     def __init__(self, db: ScopedDatabase, market: str, currency: str,
                  parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
+        # Ang Polymarket ay DIRECTIONAL (mean reversion, isang panig lang);
+        # ang Kalshi ay STRADDLE (YES+NO). Magkaiba ang tamang summary.
+        self._directional = getattr(db, "exchange", "") == "polymarket"
         info = parse_ticker(market)
-        self.setWindowTitle(info["matchup"] or market)
+        self.setWindowTitle(market if self._directional
+                            else (info["matchup"] or market))
         self.setMinimumWidth(680)
         self.setModal(True)
 
@@ -145,7 +171,7 @@ class TradeDetailDialog(QDialog):
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 18, 20, 16)
         root.setSpacing(12)
-        root.addWidget(self._header(info))
+        root.addWidget(self._header(info, market))
         root.addWidget(self._summary(rows, currency))
         root.addWidget(self._activity(rows, currency), stretch=1)
 
@@ -159,7 +185,9 @@ class TradeDetailDialog(QDialog):
 
     # ------------------------------------------------------------- sections
 
-    def _header(self, info: dict) -> QWidget:
+    def _header(self, info: dict, market: str) -> QWidget:
+        if self._directional:
+            return self._header_directional(market)
         title = QLabel(info["matchup"] or info["ticker"])
         title.setStyleSheet("font-size: 19px; font-weight: 800")
 
@@ -191,7 +219,75 @@ class TradeDetailDialog(QDialog):
             col.addWidget(note)
         return box
 
+    def _header_directional(self, market: str) -> QWidget:
+        title = QLabel(market)
+        title.setStyleSheet("font-size: 19px; font-weight: 800")
+        title.setWordWrap(True)
+        note = QLabel(
+            "Directional trade — the bot bought ONE side (UP or DOWN) "
+            "betting on mean reversion, then sells to close. The outcome "
+            "depends on which way BTC moves."
+        )
+        note.setProperty("muted", True)
+        note.setWordWrap(True)
+        box = QWidget()
+        col = QVBoxLayout(box)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(3)
+        col.addWidget(title)
+        col.addWidget(note)
+        return box
+
+    def _summary_directional(self, rows: list, currency: str) -> QWidget:
+        t = summarise_directional(rows)
+        side, n, avg = t["side"] or "—", t["contracts"], t["avg"]
+        cost, pnl = t["cost"], t["pnl"]
+
+        card = QFrame()
+        card.setProperty("card", True)
+        grid = QGridLayout(card)
+        grid.setContentsMargins(16, 13, 16, 13)
+        grid.setHorizontalSpacing(28)
+        grid.setVerticalSpacing(7)
+
+        cells = [
+            ("Side", side),
+            ("Bought", f"{n} contracts"),
+            ("Avg entry", f"{avg:.2f}"),
+            ("Total cost", f"{cost:,.2f} {currency}"),
+        ]
+        for i, (label, value) in enumerate(cells):
+            lab = QLabel(label.upper())
+            lab.setStyleSheet(
+                f"color: {theme.FAINT}; font-weight: 700; font-size: 10px;"
+                " letter-spacing: 0.5px"
+            )
+            val = QLabel(value)
+            val.setStyleSheet("font-weight: 700; font-size: 14px")
+            grid.addWidget(lab, 0, i)
+            grid.addWidget(val, 1, i)
+
+        lab = QLabel("NET P&L")
+        lab.setStyleSheet(
+            f"color: {theme.FAINT}; font-weight: 700; font-size: 10px;"
+            " letter-spacing: 0.5px"
+        )
+        if pnl is None:
+            val = QLabel("— still open")
+            val.setStyleSheet(f"color: {theme.MUTED}; font-weight: 700;"
+                              " font-size: 14px")
+        else:
+            color = theme.GREEN if pnl >= 0 else theme.RED
+            val = QLabel(f"{pnl:+,.4f} {currency}")
+            val.setStyleSheet(f"color: {color}; font-weight: 800;"
+                              " font-size: 16px")
+        grid.addWidget(lab, 0, len(cells))
+        grid.addWidget(val, 1, len(cells))
+        return card
+
     def _summary(self, rows: list, currency: str) -> QWidget:
+        if self._directional:
+            return self._summary_directional(rows, currency)
         totals = summarise(rows)
         yes_n, no_n = totals["yes"], totals["no"]
         cost, pnl = totals["cost"], totals["pnl"]
