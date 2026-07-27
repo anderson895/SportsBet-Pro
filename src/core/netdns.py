@@ -43,6 +43,8 @@ _TTL_MIN, _TTL_MAX, _TTL_DEFAULT = 60.0, 3600.0, 300.0
 
 # Cache: host -> (expiry_monotonic, [ip, ...])
 _cache: dict[str, tuple[float, list[str]]] = {}
+# Hosts already reported at INFO — later refreshes log at DEBUG (see _doh_query)
+_seen_hosts: set[str] = set()
 _lock = threading.Lock()
 
 _original_getaddrinfo = None  # itinatago para sa fallback + uninstall
@@ -79,15 +81,18 @@ def _doh_query(host: str, rrtype: int) -> list[str]:
                     default=_TTL_DEFAULT,
                 )))
                 with _lock:
-                    previous = _cache.get(host)
+                    first_time = host not in _seen_hosts
+                    _seen_hosts.add(host)
                     _cache[host] = (time.monotonic() + ttl, ips)
-                # Kalshi's TTL is 60s, so re-resolves happen every minute and
-                # at INFO they drown the log (145 DoH lines vs 19 real ones in
-                # one session). Log INFO only when the answer is NEW or CHANGED
-                # — routine cache refreshes go to DEBUG. Compare as a SET:
-                # DNS round-robins the order, so the same four IPs come back
-                # shuffled each time and a list compare would never match.
-                if previous is None or set(previous[1]) != set(ips):
+                # These hosts sit behind a CDN with a 60s TTL, so DNS is
+                # re-queried every minute and hands back a DIFFERENT set of
+                # edge IPs almost every time (Kalshi cycles through 9+ /24
+                # blocks). At INFO that buried the log — 145 DoH lines vs 19
+                # real ones in one session. Comparing the answers does NOT
+                # help: for a CDN a changed edge IP is routine, not news.
+                # So INFO once per host (proof the DoH bypass works), then
+                # DEBUG for every refresh after that.
+                if first_time:
                     filelog.info("DoH resolved %s -> %s (ttl %.0fs)",
                                  host, ips, ttl)
                 else:

@@ -45,42 +45,66 @@ class _FakeHttpClient:
         return _FakeResp(type(self).ips)
 
 
+# The REAL edge blocks api.elections.kalshi.com cycled through in one hour of
+# app.log. A CDN hands back a different set almost every 60s TTL refresh — an
+# earlier "log INFO when the answer changed" attempt therefore still logged 32
+# lines in 58 minutes. These fixtures keep the test honest.
+_REAL_KALSHI_BLOCKS = [
+    ["3.169.71.61", "3.169.71.55", "3.169.71.42", "3.169.71.108"],
+    ["52.85.118.15", "52.85.118.66", "52.85.118.82", "52.85.118.10"],
+    ["18.154.132.64", "18.154.132.60", "18.154.132.29", "18.154.132.61"],
+    ["3.163.125.74", "3.163.125.115", "3.163.125.96", "3.163.125.54"],
+    ["18.66.218.14", "18.66.218.17", "18.66.218.126", "18.66.218.108"],
+    ["13.249.126.122", "13.249.126.54", "13.249.126.50", "13.249.126.109"],
+    ["3.169.231.79", "3.169.231.127", "3.169.231.69", "3.169.231.58"],
+    ["99.86.253.79", "99.86.253.85", "99.86.253.37", "99.86.253.42"],
+    ["3.163.175.77", "3.163.175.113", "3.163.175.44", "3.163.175.43"],
+]
+
+
 class DohLogNoiseTest(unittest.TestCase):
-    """Kalshi's TTL is 60s, so the same answer is re-resolved every minute.
-    Only a NEW or CHANGED answer deserves INFO. Exercises the real
-    `_doh_query` with the network faked out."""
+    """A CDN re-resolve is routine, not news — INFO once per host, then DEBUG.
+
+    Exercises the real `_doh_query` with the network faked out.
+    """
 
     def setUp(self) -> None:
         netdns._cache.clear()
+        netdns._seen_hosts.clear()
         self._real_client = netdns.httpx.Client
         netdns.httpx.Client = _FakeHttpClient  # type: ignore[misc]
         self.addCleanup(
             lambda: setattr(netdns.httpx, "Client", self._real_client))
         self.addCleanup(netdns._cache.clear)
+        self.addCleanup(netdns._seen_hosts.clear)
 
-    def _resolve_logs(self, ips: list[str]) -> list[logging.LogRecord]:
+    def _resolve_logs(self, ips: list[str],
+                      host: str = "api.kalshi.com") -> list[logging.LogRecord]:
         _FakeHttpClient.ips = ips
         with self.assertLogs("sportsbet.netdns", level="DEBUG") as cap:
-            got = netdns._doh_query("api.kalshi.com", 1)
+            got = netdns._doh_query(host, 1)
         self.assertEqual(set(got), set(ips))
         return cap.records
 
     def test_first_resolve_is_info(self) -> None:
-        recs = self._resolve_logs(["1.1.1.1", "2.2.2.2"])
+        """One INFO line per host is the proof the DoH bypass works."""
+        recs = self._resolve_logs(_REAL_KALSHI_BLOCKS[0])
         self.assertEqual(recs[0].levelno, logging.INFO)
 
-    def test_same_answer_reshuffled_is_not_info(self) -> None:
-        """DNS round-robins the order — the same four IPs come back shuffled.
-        A list compare would log INFO forever; a set compare must not."""
-        self._resolve_logs(["1.1.1.1", "2.2.2.2"])
-        recs = self._resolve_logs(["2.2.2.2", "1.1.1.1"])  # same, reordered
-        self.assertEqual(recs[-1].levelno, logging.DEBUG,
-                         "a reshuffled repeat answer must not log at INFO")
+    def test_rotating_cdn_ips_do_not_spam_info(self) -> None:
+        """The bug this replaces: real CDN answers differ nearly every time,
+        so a changed-answer check still logged ~32 lines an hour."""
+        infos = 0
+        for i in range(58):                      # 58 min at a 60s TTL
+            recs = self._resolve_logs(_REAL_KALSHI_BLOCKS[i % 9])
+            infos += sum(r.levelno == logging.INFO for r in recs)
+        self.assertEqual(infos, 1,
+                         f"58 CDN refreshes should log INFO once, got {infos}")
 
-    def test_changed_answer_is_info(self) -> None:
-        self._resolve_logs(["1.1.1.1", "2.2.2.2"])
-        recs = self._resolve_logs(["9.9.9.9"])
-        self.assertEqual(recs[-1].levelno, logging.INFO)
+    def test_each_host_gets_its_own_info_line(self) -> None:
+        for host in ("api.kalshi.com", "clob.polymarket.com"):
+            recs = self._resolve_logs(_REAL_KALSHI_BLOCKS[0], host=host)
+            self.assertEqual(recs[0].levelno, logging.INFO, host)
 
 
 class WhyNoTradeIsLoggedTest(unittest.TestCase):
