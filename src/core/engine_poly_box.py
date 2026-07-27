@@ -16,6 +16,7 @@ dashboard wiring is identical.
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import json
 import logging
 import time
@@ -65,6 +66,23 @@ DEFAULTS = {
     "max_close_hours": 24.0,
     "paper_start_usdc": 1000.0,
 }
+
+
+def _iso_ts(raw: object) -> Optional[str]:
+    """Polymarket trade time -> ISO string the Trades table can format.
+
+    The CLOB returns `match_time` as a UNIX timestamp (seconds), e.g.
+    "1783857399" — passing that through raw makes the Trades table show the
+    bare number. Already-ISO values are kept as-is.
+    """
+    if raw in (None, ""):
+        return None
+    text = str(raw).strip()
+    try:
+        secs = float(text)
+    except ValueError:
+        return text  # already ISO (or something we shouldn't touch)
+    return dt.datetime.fromtimestamp(secs, dt.timezone.utc).isoformat()
 
 
 class BotState(Enum):
@@ -563,7 +581,7 @@ class PolyBoxEngine(QObject):
             self._db.add_trade(
                 market=market, side=outcome, action=action, price=price,
                 size=size * price, status="FILLED", meta=meta,
-                ts=str(t.get("match_time") or "") or None,
+                ts=_iso_ts(t.get("match_time")),
             )
             imported += 1
 
@@ -573,18 +591,83 @@ class PolyBoxEngine(QObject):
         for market, side in filled_keys:
             superseded += self._db.supersede_open_trades(market, side)
 
-        if imported or superseded:
+        # Realized PnL. Unlike Kalshi (which exposes /portfolio/settlements),
+        # the Polymarket CLOB has no PnL endpoint — so derive it from the
+        # fills: match SELLs against BUYs per market+side at average cost.
+        # Without this the Statistics page stays at 0 even after trading.
+        closed = self._record_realized_pnl(trades)
+
+        if imported or superseded or closed:
             self.tradeExecuted.emit()
             bits = [f"Synced {imported} new fill(s) from Polymarket "
                     f"({len(trades)} in history)"]
             if superseded:
                 bits.append(f"replaced {superseded} placeholder row(s)")
+            if closed:
+                bits.append(f"recorded PnL for {closed} closed position(s)")
             self.log("INFO", " — ".join(bits))
         else:
             filelog.info("Polymarket sync: already up to date (%d trades in "
                          "history, nothing new)", len(trades))
         await self._refresh_balance()
         return imported, len(trades)
+
+    def _record_realized_pnl(self, trades: list) -> int:
+        """Derive realized PnL per market+side from the fills and record it.
+
+        Average-cost method: for each (market, outcome) total the BUY cost and
+        the SELL proceeds, then
+
+            realized = sell_proceeds − avg_buy_price × matched_shares
+
+        Only positions with at least one SELL are booked (an open position has
+        no realized PnL yet). Idempotent — one row per market+side, updated in
+        place on later syncs.
+        """
+        legs: dict[tuple[str, str], dict[str, float]] = {}
+        for t in trades:
+            if not isinstance(t, dict):
+                t = getattr(t, "__dict__", {}) or {}
+            market = str(t.get("market") or t.get("condition_id") or "")
+            outcome = str(t.get("outcome") or "").upper() or "?"
+            try:
+                price = float(t.get("price") or 0.0)
+                shares = float(t.get("size") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if not market or shares <= 0 or price <= 0:
+                continue
+            leg = legs.setdefault((market, outcome), {
+                "buy_shares": 0.0, "buy_cost": 0.0,
+                "sell_shares": 0.0, "sell_proceeds": 0.0})
+            if str(t.get("side", "")).upper() == "SELL":
+                leg["sell_shares"] += shares
+                leg["sell_proceeds"] += shares * price
+            else:
+                leg["buy_shares"] += shares
+                leg["buy_cost"] += shares * price
+
+        recorded = 0
+        for (market, outcome), leg in legs.items():
+            sold, bought = leg["sell_shares"], leg["buy_shares"]
+            if sold <= 0 or bought <= 0:
+                continue  # still open (or sell-only) — nothing realized yet
+            avg_cost = leg["buy_cost"] / bought
+            matched = min(sold, bought)
+            cost = avg_cost * matched
+            proceeds = leg["sell_proceeds"] * (matched / sold)
+            pnl = round(proceeds - cost, 4)
+            meta = f"poly_realized:{market}:{outcome}"
+            if self._db.has_trade_meta(meta):
+                self._db.set_trade_pnl_by_meta(meta, pnl, round(cost, 4))
+                continue
+            self._db.add_trade(
+                market=market, side=outcome, action="CLOSE",
+                price=round(proceeds / matched, 4), size=round(cost, 4),
+                status="FILLED", pnl=pnl, meta=meta,
+            )
+            recorded += 1
+        return recorded
 
     # ---------------------------------------------------------- persistence
 
