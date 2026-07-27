@@ -74,6 +74,31 @@ def group_games(rows: list[dict]) -> list[dict]:
     return [games[k] for k in order]
 
 
+def group_markets_flat(rows: list[dict]) -> list[dict]:
+    """ONE card per binary market (Polymarket) — not team-matchup grouping.
+
+    Polymarket markets are arbitrary Yes/No questions, not sports matchups. Each
+    row already carries both sides, so the market's Yes/No become the two
+    "teams" and the existing GameCard / featured rendering works unchanged.
+    """
+    out: list[dict] = []
+    for row in rows:
+        yes_mid = (row.get("yes_bid", 0) + row.get("yes_ask", 0)) / 2.0
+        no_mid = 100.0 - yes_mid
+        title = str(row.get("title", ""))
+        out.append({
+            "matchup": title[:70],
+            "league": "POLYMARKET",
+            "icon": "fa6s.cube",
+            "ticker": str(row.get("ticker", "")),
+            "title": title,
+            "vol": int(row.get("volume", 0)),
+            "ready": row.get("status") == "READY",
+            "teams": [("Yes", yes_mid), ("No", no_mid)],
+        })
+    return out
+
+
 class GameCard(Card):
     """Isang matchup card — kagaya ng kalshi.com game tiles. Clickable:
     kapag pinindot, iea-emit ang game dict para i-feature sa chart."""

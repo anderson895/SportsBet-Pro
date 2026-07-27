@@ -79,6 +79,12 @@ pinapaayos ko para hindi mo makalimutan")._
 - ✅ **Polymarket box-arb feasibility verified** — Gamma API returns binary
   markets with Yes/No outcomes, prices, bestBid/bestAsk, clobTokenIds, volume.
   Box arb works the same way: find ~50/50 markets where YES_ask + NO_ask < $1.
+- ✅ **DONE — both panels ship as Box Arbitrage (v1.5.0 released).**
+- ✅ **Polymarket dashboard display fix** — the reused Kalshi sports-card view
+  dropped Polymarket markets (they aren't team matchups → "No candidate games").
+  Added `group_markets_flat` (one card per binary market, Yes/No outcomes) and a
+  `flat_markets` mode; relabelled "Live Sports Markets" → "Live Markets".
+  Verified: Polymarket markets now render, READY 50/50 featured first.
 
 ## Polymarket box-arb build plan (files)
 

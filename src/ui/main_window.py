@@ -27,7 +27,7 @@ from src.ui.kalshi_settings import KalshiSettingsPage
 from src.ui.loading_overlay import LoadingOverlay
 from src.ui.poly_box_settings import PolyBoxSettingsPage
 
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.5.1"
 
 TF_LABELS = {"daily": "Daily", "4h": "4 Hours", "1h": "1 Hour", "15m": "15 Minutes"}
 
@@ -51,7 +51,9 @@ class MainWindow(QMainWindow):
         poly_dash = KalshiDashboard(
             poly_db, exchange_key="polymarket", exchange_label="Polymarket",
             exchange_icon="fa6s.cube", exchange_color=theme.POLY_ACCENT,
-            currency="USDC", paper_start_key="paper_start_usdc")
+            currency="USDC", paper_start_key="paper_start_usdc",
+            flat_markets=True, markets_label="Live Markets",
+            market_noun="market")
         poly_settings = PolyBoxSettingsPage(poly_db)
         self.poly_panel = ExchangePanel(
             engine=poly_engine,

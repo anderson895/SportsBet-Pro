@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 
 from src.storage.db import ScopedDatabase
 from src.ui import theme
-from src.ui.kalshi_cards import GameCard, group_games
+from src.ui.kalshi_cards import GameCard, group_games, group_markets_flat
 from src.ui.pages import local_time
 from src.ui.widgets import Card, Pill, StatCard, StatusCard
 
@@ -59,6 +59,9 @@ class KalshiDashboard(QWidget):
         exchange_color: str = theme.KALSHI_ACCENT,
         currency: str = "USD",
         paper_start_key: str = "paper_start_usd",
+        flat_markets: bool = False,        # True: one card per binary market
+        markets_label: str = "Live Sports Markets",
+        market_noun: str = "game",         # "game" (sports) | "market" (poly)
     ) -> None:
         super().__init__()
         self._db = db
@@ -72,6 +75,9 @@ class KalshiDashboard(QWidget):
         self._exchange_label = exchange_label
         self._currency = currency
         self._paper_start_key = paper_start_key
+        self._flat_markets = flat_markets
+        self._markets_label = markets_label
+        self._market_noun = market_noun
 
         # ---- Status cards row -------------------------------------------
         self.cards = {
@@ -161,7 +167,7 @@ class KalshiDashboard(QWidget):
         fc.addWidget(self._strategy_label)
 
         # ---- Scanned markets — Kalshi-style game cards grid + search ----
-        table_title = QLabel("Live Sports Markets")
+        table_title = QLabel(self._markets_label)
         table_title.setProperty("accent", True)
         self._search = QLineEdit()
         self._search.setPlaceholderText("Search team or matchup…")
@@ -315,7 +321,11 @@ class KalshiDashboard(QWidget):
         return f"{100.0 / pct:.2f}x"
 
     def update_markets(self, rows: list) -> None:
-        games = group_games(rows)
+        if self._flat_markets:
+            # Polymarket: one card per binary market (no team-matchup grouping)
+            games = group_markets_flat(rows)
+        else:
+            games = group_games(rows)
         # READY muna, tapos by volume — para nasa taas ang tradeable
         games.sort(key=lambda g: (not g["ready"], -g["vol"]))
         self._all_games = [g for g in games if len(g["teams"]) >= 2]
@@ -397,13 +407,14 @@ class KalshiDashboard(QWidget):
             # Laging-bukas ang scanner (hindi kailangang naka-START ang
             # bot) — kaya loading spinner habang wala pang laman, para
             # halatang nagpo-proseso pa at hindi nakatigil.
+            noun = self._market_noun
             if self._search.text().strip():
                 msg, loading = "No match for your search.", False
             elif getattr(self, "_has_scanned", False):
-                msg = "No candidate games right now — rescanning…"
+                msg = f"No 50/50 {noun}s in range right now — rescanning…"
                 loading = True
             else:
-                msg, loading = "Scanning live sports markets…", True
+                msg, loading = f"Scanning live {noun}s…", True
             self._grid.addWidget(self._make_hint(msg, loading), 0, 0)
             return
 
