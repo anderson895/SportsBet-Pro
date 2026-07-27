@@ -19,6 +19,7 @@ from PySide6.QtWidgets import QApplication, QLabel, QWidget
 from src.storage.db import Database
 from src.ui import help_content
 from src.ui.about_page import AboutPage
+from src.ui.kalshi_dashboard import KalshiDashboard
 from src.ui.kalshi_settings import KalshiSettingsPage
 from src.ui.poly_settings import PolySettingsPage
 from src.ui.widgets import StatCard
@@ -38,6 +39,20 @@ def _visible_strays(root: QWidget) -> list[QWidget]:
     ]
 
 
+def _markets(n: int) -> list[dict]:
+    rows = []
+    for i in range(n):
+        ev = f"KXMLBGAME-26JUL24G{i:02d}"
+        for team, pct in ((f"Team A{i}", 60), (f"Team B{i}", 40)):
+            rows.append({
+                "ticker": f"{ev}-{team[-2:]}",
+                "title": f"Team A{i} vs Team B{i} Winner? ({team})",
+                "yes_bid": pct, "yes_ask": pct, "no_bid": 100 - pct,
+                "no_ask": 100 - pct, "volume": 1_000_000, "status": "WATCH",
+            })
+    return rows
+
+
 class AboutPageRenderTest(unittest.TestCase):
     def setUp(self) -> None:
         self.page = AboutPage("Help", "", default_tag=help_content.KALSHI)
@@ -45,7 +60,7 @@ class AboutPageRenderTest(unittest.TestCase):
         self.addCleanup(self.page.deleteLater)
 
     def test_searching_leaves_no_visible_stray_window(self) -> None:
-        for query in ("stretch", "idle", "wallet type", "zzz", ""):
+        for query in ("hedge", "fees", "wallet type", "zzz", ""):
             self.page._on_search(query)
             _app.processEvents()
             self.assertEqual(
@@ -56,10 +71,39 @@ class AboutPageRenderTest(unittest.TestCase):
     def test_old_cards_are_gone_from_the_layout(self) -> None:
         self.page._on_search("")
         first = self.page._body_col.count()
-        self.page._on_search("stretch")
+        self.page._on_search("hedge")
         self.assertLess(self.page._body_col.count(), first)
         self.assertEqual(self.page._body_col.count(),
                          len(self.page._visible_sections()))
+
+
+class MarketGridRenderTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.dash = KalshiDashboard(Database().scope("kalshi"))
+        self.dash.resize(1000, 600)
+        self.addCleanup(self.dash.deleteLater)
+
+    def test_market_search_leaves_no_visible_stray_window(self) -> None:
+        self.dash.update_markets(_markets(6))
+        _app.processEvents()
+        for query in ("Team A1", "zzz", ""):
+            self.dash._search.setText(query)
+            _app.processEvents()
+            self.assertEqual(
+                _visible_strays(self.dash), [],
+                f"lumitaw ang stray window pagkatapos ng search {query!r}",
+            )
+
+    def test_empty_hint_disappears_once_cards_arrive(self) -> None:
+        """Ang kabaligtarang bug: dapat AGAD mawala ang hint, kung hindi ay
+        nag-o-overlap ito sa unang card."""
+        self.dash.update_markets(_markets(4))
+        _app.processEvents()
+        visible_hints = [
+            w.text() for w in self.dash.findChildren(QLabel)
+            if "Scanning live sports markets" in w.text() and w.isVisible()
+        ]
+        self.assertEqual(visible_hints, [])
 
 
 class _WindowShowSpy(QObject):

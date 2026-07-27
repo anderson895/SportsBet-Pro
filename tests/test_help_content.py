@@ -59,8 +59,8 @@ class SearchTest(unittest.TestCase):
 
     def test_all_words_must_match(self) -> None:
         """Multi-word na query = AND, hindi OR."""
-        self.assertTrue(search("mean reversion"))
-        self.assertEqual(search("mean zzzznotarealword"), [])
+        self.assertTrue(search("hedge sentinel"))
+        self.assertEqual(search("hedge zzzznotarealword"), [])
 
     def test_unknown_query_returns_nothing(self) -> None:
         self.assertEqual(search("qqqzzzxyz"), [])
@@ -76,15 +76,18 @@ class UserQuestionsTest(unittest.TestCase):
     dapat may masasagot na paksa."""
 
     QUESTIONS = {
-        "mean reversion": "how the strategy works",
-        "stretch": "entry conditions",
+        "hedge": "Hedge Sentinel",
+        "fees": "fees",
         "wallet type": "Wallet Type / balance 0.00",
         "why no trade": "entry conditions",
         "idle": "why the bot sits idle",
         "resting": "reading the Trades page",
+        "sync": "sync from exchange",
+        "draw": "three-way soccer markets",
+        "paper": "paper vs live",
         "signer": "rejected Polymarket orders",
         "stop": "safety notes",
-        "timeframe": "settings reference",
+        "timeframe": "Polymarket settings",
     }
 
     def test_each_question_finds_a_topic(self) -> None:
@@ -105,13 +108,23 @@ class StaysInSyncWithCodeTest(unittest.TestCase):
                 return s.body
         self.fail(f"walang Kalshi section na may {needle!r} sa title")
 
-    def test_documented_entry_stretch_matches_default(self) -> None:
+    def test_documented_entry_price_matches_default(self) -> None:
         body = self._kalshi_body("settings reference")
-        self.assertIn(f"{KALSHI_DEFAULTS['min_stretch_pct']:g}%", body)
+        self.assertIn(f"{KALSHI_DEFAULTS['entry_price_cents']}¢", body)
 
-    def test_documented_take_profit_matches_default(self) -> None:
+    def test_documented_hedge_price_matches_default(self) -> None:
         body = self._kalshi_body("settings reference")
-        self.assertIn(f"{int(KALSHI_DEFAULTS['profit_target_pct'])}%", body)
+        self.assertIn(f"{KALSHI_DEFAULTS['hedge_max_price']}¢", body)
+
+    def test_documented_hedge_timeout_matches_default(self) -> None:
+        body = self._kalshi_body("Hedge Sentinel")
+        secs = int(KALSHI_DEFAULTS["hedge_timeout_secs"])
+        self.assertIn(f"{secs} seconds", body)
+
+    def test_documented_close_windows_match_defaults(self) -> None:
+        body = self._kalshi_body("settings reference")
+        self.assertIn(f"{int(KALSHI_DEFAULTS['min_close_mins'])} minutes", body)
+        self.assertIn(f"{int(KALSHI_DEFAULTS['max_close_hours'])} hours", body)
 
 
 if __name__ == "__main__":

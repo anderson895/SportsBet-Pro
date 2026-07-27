@@ -158,6 +158,22 @@ class PolymarketClient:
     def cancel_all(self) -> None:
         self._client.cancel_all()
 
+    def filled_size(self, order_id: str) -> float:
+        """Matched (filled) share count of a resting order. 0 if unknown.
+
+        Used by the box-arbitrage executor to track single-sided fills. CLOB V2
+        returns `size_matched` on the order; tolerant of dict/object shapes.
+        """
+        if not order_id:
+            return 0.0
+        try:
+            o = self._client.get_order(order_id)
+        except Exception:
+            return 0.0
+        if isinstance(o, dict):
+            return float(o.get("size_matched") or o.get("sizeMatched") or 0)
+        return float(getattr(o, "size_matched", 0) or 0)
+
 
 def _order_id(resp: object) -> str:
     if isinstance(resp, dict):

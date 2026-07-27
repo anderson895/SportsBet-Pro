@@ -6,42 +6,39 @@ Both can run at the same time.
 
 | Panel | Strategy | Markets | Currency |
 |---|---|---|---|
-| **Polymarket** | Mean Reversion ("Rubber Band") | Daily / 4h / 1h / 15m BTC Up/Down | USDC (Polygon) |
-| **Kalshi** | Mean Reversion ("Rubber Band") | 1h / Daily BTC Above/Below (KXBTCD) | USD |
+| **Polymarket** | Internal Straddle / Box Arbitrage | ~50/50 binary markets | USDC (Polygon) |
+| **Kalshi** | Internal Straddle / Box Arbitrage | ~50/50 sports moneylines | USD |
 
-Both panels now run the **same** mean-reversion BTC strategy — only the venue
-(and the panel branding) differs.
+Both panels run the **same** Box-Arbitrage ("arbitrage betting") strategy — only
+the venue (and the panel branding) differs.
 
 ---
 
-## 🆕 What's New in v1.4.0
+## 🆕 What's New in v1.5.0
 
-**The Kalshi panel now runs the same Mean-Reversion BTC strategy as Polymarket.**
-The old Internal Straddle / Box-Arbitrage on 50/50 sports markets has been
-retired; the reference PDF is now background material only.
+**Both panels now run the same Box-Arbitrage strategy.** The Polymarket panel has
+been switched from Mean Reversion to the same Internal Straddle / Box-Arbitrage
+used by the Kalshi panel.
 
-- **Kalshi = Mean Reversion** — a Binance BTC feed drives the same
-  `strategy/mean_reversion` entry/exit rules and death-trap filters used by
-  Polymarket. Kalshi has no single "Up or Down" market, so the bot synthesizes
-  one from the **KXBTCD "Above/Below" hourly ladder**: it pins the strike
-  nearest the period open as the up/down pivot (**YES = above = UP**,
-  **NO = below = DOWN**) and buys the cheap contrarian side.
-- **Kalshi timeframes** — **1 Hour** (the reliably-listed KXBTCD ladder) and
-  **Daily**. (Kalshi has no 15m/4h BTC up/down market — those stay
-  Polymarket-only.)
-- **New Kalshi-branded BTC dashboard** — live price chart + stretch %, status
-  cards (Internet / Binance / Kalshi), strategy status line, and logs. Distinct
-  mint branding from the Polymarket panel.
-- **Kalshi settings** — mean-reversion knobs (risk USD, timeframe, stretch band,
-  take-profit, volume/premium filters, Economic Data Day) alongside the Kalshi
-  API Key ID / RSA key / environment fields.
-- **Single-side execution** — `KalshiLiveExecutor` buys to open and sells to
-  close one directional position (mirrors the Polymarket executor); the straddle
-  Hedge-Sentinel machinery is gone.
-- **Clear Trades** — a new button on the Trades page wipes an exchange's local
-  trade history (with confirmation); Statistics and balance refresh with it.
+- **Polymarket = Box Arbitrage** — the Gamma API lists binary markets with
+  Yes/No tokens, live best bid/ask, and volume. The bot scans for liquid ~50/50
+  markets (any market works — box arb is market-agnostic) and places two resting
+  CLOB BUY limit orders (**YES + NO**) below a combined $1.00, for a guaranteed
+  $1.00 payout at resolution. Shares the pure `strategy/straddle.py` state
+  machine + **Hedge Sentinel** with the Kalshi panel.
+- **Kalshi = Box Arbitrage** — unchanged from the original: the same straddle on
+  ~50/50 sports moneylines.
+- **Shared engine design** — `engine_poly_box.py` mirrors `engine_kalshi.py`;
+  the sports-cards dashboard is reused for both panels (Polymarket = indigo,
+  Kalshi = mint).
+- **Clear Trades** — per-exchange button on the Trades page wipes local trade
+  history (with confirmation); Statistics and balance refresh with it.
 
-Releases: **[v1.4.0 (latest)](https://github.com/anderson895/SportsBet-Pro/releases/tag/v1.4.0)**
+> ⚠️ Live box-arb orders on **both** venues are implemented against the
+> documented order APIs but not yet verified on funded accounts — validate with
+> a tiny real order first. **Paper mode is fully working on both panels.**
+
+Releases: **[v1.5.0 (latest)](https://github.com/anderson895/SportsBet-Pro/releases/tag/v1.5.0)**
 · [all releases](https://github.com/anderson895/SportsBet-Pro/releases)
 
 ---

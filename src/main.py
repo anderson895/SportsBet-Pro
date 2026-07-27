@@ -34,7 +34,7 @@ from PySide6.QtWidgets import QApplication
 
 from src.core.applog import asyncio_exception_handler, setup_logging
 from src.core.engine_kalshi import KalshiEngine
-from src.core.engine_poly import PolyEngine
+from src.core.engine_poly_box import PolyBoxEngine
 from src.core.paths import resource_path
 from src.storage.db import Database
 from src.ui.main_window import MainWindow
@@ -69,7 +69,7 @@ def main() -> None:
     db = Database()
     poly_db = db.scope("polymarket")
     kalshi_db = db.scope("kalshi")
-    poly_engine = PolyEngine(poly_db)
+    poly_engine = PolyBoxEngine(poly_db)
     kalshi_engine = KalshiEngine(kalshi_db)
     window = MainWindow(db, poly_engine, kalshi_engine, poly_db, kalshi_db)
     window.showMaximized()  # default: fullscreen/maximized pag-open

@@ -36,7 +36,7 @@ class AboutPageTest(unittest.TestCase):
 
     def test_search_narrows_the_list(self) -> None:
         page = self._page()
-        page._on_search("stretch")
+        page._on_search("hedge")
         found = page._visible_sections()
         self.assertTrue(found)
         self.assertLess(len(found), len(help_content.SECTIONS))
@@ -60,7 +60,7 @@ class AboutPageTest(unittest.TestCase):
 
     def test_clearing_search_restores_everything(self) -> None:
         page = self._page()
-        page._on_search("stretch")
+        page._on_search("hedge")
         page._on_search("")
         self.assertEqual(len(page._visible_sections()),
                          len(help_content.SECTIONS))
@@ -81,7 +81,7 @@ class AboutPageTest(unittest.TestCase):
         """Ang setParent(None) ay nag-aalis agad — kung deleteLater lang,
         nananatiling nakikita ang lumang laman sa ibabaw ng bago."""
         page = self._page()
-        page._on_search("stretch")
+        page._on_search("hedge")
         expected = len(page._visible_sections())
         self.assertEqual(page._body_col.count(), expected)
 

@@ -1,71 +1,68 @@
-"""Kalshi bot engine — Mean Reversion / "Rubber Band" on BTC Up/Down.
+"""Kalshi bot engine — Internal Straddle / Box Arbitrage sa sports markets.
 
-Same strategy as the Polymarket engine (``engine_poly.py``): a Binance price
-feed drives ``evaluate_entry``/``evaluate_exit`` from ``strategy/mean_reversion``;
-the only difference is the venue. Kalshi has no single "Up or Down" market, so
-``execution/kalshi_market`` synthesizes one from the KXBTCD above/below ladder
-(strike nearest the period open = the up/down pivot).
+Flow kada cycle:
+1. SCAN     : hanapin ang mga ~50/50 high-volume sports market (public API)
+2. PLACE    : dalawang post-only resting BUY (YES @49¢ + NO @49¢)
+3. MONITOR  : i-poll ang fills kada ~3s; ang StraddleCycle state machine
+              (strategy/straddle.py) ang nagdedesisyon
+4. SENTINEL : kapag single-sided masyadong matagal (o tumakbo ang presyo),
+              kanselahin ang lagging order at i-hedge hanggang 51¢
+5. RECORD   : LOCKED (+~1.1%), HEDGED (~breakeven), CANCELLED, o
+              UNHEDGED_HOLD (hihintayin ang settlement)
 
-- PAPER mode reuses the shared, exchange-agnostic ``PaperExecutor`` (simulated
-  fills, estimated share price) — identical to Polymarket paper trading.
-- LIVE mode uses ``KalshiLiveExecutor`` against the real Kalshi CLOB; share
-  prices come from the discovered market's order book.
-
-QObject so it can emit the same Qt signals the (Kalshi-branded) BTC dashboard
-consumes — the wiring mirrors ``PolyEngine`` one-for-one.
+QObject para maka-emit ng Qt signals sa UI (parehong pattern ng PolyEngine).
 """
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import datetime as dt
 import logging
-import re
+import time
 from enum import Enum
+from typing import Optional
 
 from PySide6.QtCore import QObject, Signal
 
 from src.core import secrets as secret_store
-from src.core.status import ConnectionMonitor
 from src.execution.kalshi_client import (
     KalshiClient,
     KalshiError,
     best_prices_from_orderbook,
 )
 from src.execution.kalshi_live import KalshiLiveExecutor
-from src.execution.kalshi_market import best_prices_for_side, find_btc_market
-from src.execution.paper import (
-    PaperExecutor,
-    estimate_otm_share_price,
-    position_share_price,
-)
-from src.execution.resume import decide_restore
-from src.feed.binance import BinanceFeed
-from src.feed.coinbase import CoinbaseFeed
+from src.execution.kalshi_paper import KalshiPaperExecutor
 from src.storage.db import ScopedDatabase
-from src.strategy.filters import (
-    coinbase_premium_pct,
-    is_premium_exploding,
-    is_volume_escalating,
-)
-from src.strategy.mean_reversion import (
-    Action,
-    StrategyConfig,
-    evaluate_entry,
-    evaluate_exit,
-    period_start_utc,
-    scale_config_for_timeframe,
-    stretch_scale,
-    target_side,
+from src.strategy.straddle import (
+    CycleState,
+    MarketCandidate,
+    ScanConfig,
+    SentinelConfig,
+    StraddleCycle,
+    is_candidate,
+    rank_candidates,
+    straddle_sizing,
 )
 
 filelog = logging.getLogger("sportsbet.engine_kalshi")
 
-DEFAULT_RISK_USD = 100.0
-# Market timeframe -> Binance kline interval (for the period open / strike).
-# Kalshi's clean up/down ladder (KXBTCD) is hourly, so 1h is the default and
-# the only reliably tradeable LIVE timeframe (daily attempted if listed).
-TF_TO_INTERVAL = {"daily": "1d", "4h": "4h", "1h": "1h", "15m": "15m"}
+SCAN_INTERVAL_SECS = 30
+FILL_POLL_SECS = 3
+SETTLE_POLL_SECS = 60
+STRADDLE_KEY = "open_straddle"  # settings key (naka-scope na sa kalshi)
+
+DEFAULTS = {
+    "risk_usd": 100.0,
+    "entry_price_cents": 49,
+    "hedge_timeout_secs": 90.0,
+    "hedge_max_price": 51,
+    "hedge_retries": 3,
+    # Mas malawak na lambat = mas maraming 50/50 candidate = mas mataas na
+    # fill rate, nang hindi hinahawakan ang 49¢ entry (box-arb edge)
+    "min_volume": 3000,
+    "min_close_mins": 30.0,
+    "max_close_hours": 24.0,
+    "paper_start_usd": 1000.0,
+}
 
 
 class BotState(Enum):
@@ -74,193 +71,615 @@ class BotState(Enum):
 
 
 class KalshiEngine(QObject):
-    priceUpdated = Signal(float)          # latest BTC price
-    dailyOpenUpdated = Signal(float)      # period open / "Price to Beat"
-    stretchUpdated = Signal(float)        # % distance from period open
-    connectionChanged = Signal(str, bool)  # (service, is_up) — unused (shared)
     stateChanged = Signal(str)            # BotState value
     strategyStatus = Signal(str)          # human-readable strategy state
-    tradeExecuted = Signal()              # bagong trade sa DB
+    straddleStatus = Signal(str)          # active cycle state machine text
+    marketsScanned = Signal(list)         # list[dict] para sa dashboard table
+    marketTick = Signal(str, str, float, float)  # (ticker, title, yes%, no%)
+    tradeExecuted = Signal()              # may bagong trade sa DB
     logAdded = Signal(str, str)           # (level, message)
     modeChanged = Signal(str)             # "PAPER" | "LIVE"
     liveBalance = Signal(float)           # totoong USD balance (live mode)
-    historyLoaded = Signal(list)          # 1m klines para sa chart prefill
-    klineUpdated = Signal(tuple)          # live 1m kline (t,o,h,l,c,v)
-    rangeHistoryLoaded = Signal(list)     # on-demand klines (Time filter)
+    connectionChanged = Signal(str, bool)  # unused (shared monitor sa poly)
 
-    def __init__(
-        self, db: ScopedDatabase, config: StrategyConfig | None = None
-    ) -> None:
+    def __init__(self, db: ScopedDatabase) -> None:
         super().__init__()
         self._db = db
         self.state = BotState.STOPPED
-        self.config = config or StrategyConfig()
-        self.executor: PaperExecutor | KalshiLiveExecutor = PaperExecutor(db)
-        self._trades_today = 0
-        self._trades_period: float | None = None
-        self._volume_veto_logged = False
-        self._premium_veto_logged = False
-        self._watch_log_key = ""
-        # Live mode state
-        self._live_client: KalshiClient | None = None
-        self._live_books: dict[str, tuple[float | None, float | None]] = {}
-        self._live_price_task: asyncio.Task | None = None
-        self._live_balance_task: asyncio.Task | None = None
-        self._live_pending = False
-        self._order_in_flight = False  # guard: one async order at a time
-        # Kalshi's usable up/down ladder is hourly — default to 1h
-        self._timeframe = "1h"
-        self._price_scale = stretch_scale("1h")
-        self._period_secs = 3600.0
+        self.executor: KalshiPaperExecutor | KalshiLiveExecutor = KalshiPaperExecutor()
+        self._client: Optional[KalshiClient] = None
+        self._loop_task: Optional[asyncio.Task] = None
+        self._balance_task: Optional[asyncio.Task] = None
+        self._session_ready = False  # handa na ba ang executor (post-START)
+        self._cycle: Optional[StraddleCycle] = None
+        self._cycle_title: str = ""  # matchup title ng aktibong straddle
+        self._traded_tickers: set[str] = set()  # iwasang i-straddle ulit
+        # Chart: focused market (ticker, title) na pino-poll kada ilang segundo
+        self._chart_focus: Optional[tuple[str, str]] = None
+        self._chart_focus_user = False  # pinili ba ng user (huwag i-auto-override)
+        self._chart_task: Optional[asyncio.Task] = None
 
-        self._feed = BinanceFeed(
-            on_price=self._handle_price,
-            on_daily_open=self._handle_daily_open,
-            on_status=lambda up: self.connectionChanged.emit("binance_ws", up),
-            on_history=self.historyLoaded.emit,
-            on_kline=self.klineUpdated.emit,
-        )
-        # Shared connection monitor lives on the Poly engine; here we still
-        # create the feed but rely on that monitor's "kalshi" status fan-out.
-        self._coinbase = CoinbaseFeed()
+    def set_chart_focus(self, ticker: str, title: str) -> None:
+        """Tawagin ng UI kapag pinili ng user ang isang market sa chart
+        (carousel o click). Hindi ito i-o-override ng auto-scanner, at
+        agad kumukuha ng unang presyo para hindi maghintay ng 3-5s."""
+        self._chart_focus = (ticker, title)
+        self._chart_focus_user = True
+        try:
+            asyncio.create_task(self._chart_poll_once(ticker, title))
+        except RuntimeError:
+            pass  # walang running loop (hal. sa tests)
+
+    async def _chart_poll_once(self, ticker: str, title: str) -> None:
+        """Isang mabilis na poll ng napiling market — instant na tick."""
+        if self._client is None:
+            return
+        try:
+            book = await self._client.get_orderbook(ticker)
+            p = best_prices_from_orderbook(book)
+            if p.get("yes_bid") and p.get("yes_ask"):
+                ymid = (p["yes_bid"] + p["yes_ask"]) / 2.0
+                nmid = (p["no_bid"] + p["no_ask"]) / 2.0
+                self.marketTick.emit(ticker, title, ymid, nmid)
+        except Exception as e:
+            filelog.debug("Immediate chart poll failed: %s", e)
 
     # ------------------------------------------------------------------ API
 
     def start_monitors(self) -> None:
-        """Always-on Binance chart feed (runs even while STOPPED)."""
-        tf = str(self._db.get_setting("market_timeframe", "1h"))
-        self._feed.set_period(TF_TO_INTERVAL.get(tf, "1h"))
-        self._feed.start()
+        """Buksan ang laging-bukas na market feed (tulad ng Binance chart ng
+        Polymarket): nagsa-scan at nagpapakita ng live game cards + chart
+        KAHIT STOPPED. Ang START/STOP ay para lang sa aktwal na trading."""
+        if self._loop_task is None or self._loop_task.done():
+            self._loop_task = asyncio.create_task(self._loop(), name="kalshi-loop")
+        if self._chart_task is None or self._chart_task.done():
+            self._chart_task = asyncio.create_task(
+                self._chart_loop(), name="kalshi-chart")
+
+    async def _chart_loop(self) -> None:
+        """Mabilis na chart feed — pino-poll ang focused market kada 5s para
+        mabilis mapuno ang linya (ang scan loop ay kada 30s, masyadong bagal
+        para sa chart). Ang focus ay itinatakda ng scanner/monitor."""
+        while True:
+            try:
+                foc = self._chart_focus
+                if foc is not None and self._client is not None:
+                    ticker, title = foc
+                    book = await self._client.get_orderbook(ticker)
+                    p = best_prices_from_orderbook(book)
+                    if p.get("yes_bid") and p.get("yes_ask"):
+                        ymid = (p["yes_bid"] + p["yes_ask"]) / 2.0
+                        nmid = (p["no_bid"] + p["no_ask"]) / 2.0
+                        self.marketTick.emit(ticker, title, ymid, nmid)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                filelog.debug("Chart poll error: %s", e)
+            await asyncio.sleep(3)
 
     def start(self) -> None:
         if self.state is BotState.RUNNING:
             return
-        self.config = self._load_config()
         self.state = BotState.RUNNING
-        self._watch_log_key = ""
-
+        self._session_ready = False
         mode = str(self._db.get_setting("trading_mode", "paper")).lower()
-        if mode == "live":
-            self._live_pending = True
-            asyncio.create_task(self._setup_live())
-        else:
-            self.executor = PaperExecutor(self._db)
-            self.modeChanged.emit("PAPER")
-            self._restore_position()
-
-        self._feed.set_period(TF_TO_INTERVAL[self._timeframe])
-        self._feed.start()
-        self._coinbase.start()
+        asyncio.create_task(self._begin_session(mode), name="kalshi-session")
         self.stateChanged.emit(self.state.value)
-        self.log("INFO", f"Bot STARTED [{mode.upper()} MODE] — "
-                         f"{self._timeframe.upper()} market, "
-                         "mean reversion strategy active")
+        self.log("INFO", f"Bot STARTED [{mode.upper()} MODE] — Internal "
+                         "Straddle (box arbitrage) on 50/50 sports markets")
 
     async def stop(self) -> None:
         if self.state is BotState.STOPPED:
             return
         self.state = BotState.STOPPED
-        await self._coinbase.stop()
-        for attr in ("_live_price_task", "_live_balance_task"):
-            task = getattr(self, attr)
-            if task is not None:
-                task.cancel()
-                setattr(self, attr, None)
+        self._session_ready = False
+        # HINDI hinihinto ang _loop_task — buhay pa rin ang market feed
+        # (cards + chart) kahit STOPPED; ang trading lang ang huminto
+        if self._balance_task is not None:
+            self._balance_task.cancel()
+            self._balance_task = None
         self.stateChanged.emit(self.state.value)
-        self.strategyStatus.emit("idle (press START BOT)")
-        self.log("INFO", "Bot STOPPED")
+        self.straddleStatus.emit("—")
+        self.log("INFO", "Bot STOPPED — trading paused; live market feed "
+                         "stays on. LIVE resting orders (if any) remain on "
+                         "the exchange; cancel them on kalshi.com if unwanted")
 
-    # ------------------------------------------------------------ live mode
+    def log(self, level: str, message: str) -> None:
+        self._db.add_log(level, message)
+        self.logAdded.emit(level, message)
+        py_level = {"WARN": logging.WARNING, "ERROR": logging.ERROR}.get(
+            level, logging.INFO
+        )
+        filelog.log(py_level, message)
 
-    async def _setup_live(self) -> None:
-        """Connect to Kalshi; on failure fall back to PAPER."""
+    # ------------------------------------------------------------- main loop
+
+    async def _begin_session(self, mode: str) -> None:
+        """Ihanda ang executor kapag nag-START (paper/live). Kapag pumalya
+        ang LIVE, bumalik sa PAPER (tulad ng Polymarket)."""
         try:
-            env = str(self._db.get_setting("env", "prod"))
+            await self._setup(mode)
+        except Exception as e:
+            filelog.exception("Kalshi live setup failed:")
+            self.log("ERROR", f"Live setup failed: {e} — falling back to "
+                              "PAPER mode")
+            try:
+                self.executor = KalshiPaperExecutor()
+                self.modeChanged.emit("PAPER")
+            except Exception as e2:
+                filelog.exception("Paper fallback also failed:")
+                self.log("ERROR", f"Paper fallback failed: {e2} — bot stopped")
+                self.state = BotState.STOPPED
+                self.stateChanged.emit(self.state.value)
+                return
+        self._restore_cycle()
+        await self._reconcile_resting_orders()
+        self._session_ready = True
+
+    async def _reconcile_resting_orders(self) -> None:
+        """LIVE start: kanselahin ang ORPHANED resting orders sa Kalshi.
+
+        Kapag na-restart (o nag-crash) ang app habang may nakalatag na
+        straddle, naiiwan ang mga totoong order sa exchange pero bagong
+        (walang-laman) na executor ang bumubukas — kaya wala nang
+        nagba-bantay o makakakansela sa kanila. Dito, ikinukumpara ang
+        totoong resting orders sa na-restore na cycle:
+
+        - kung tumutugma ang ticker sa na-restore na cycle -> IWAN (buhay
+          pa ang pagba-bantay nito sa fills/hedge/settlement)
+        - kung hindi -> ORPHAN -> kanselahin
+
+        Kapag walang na-restore na cycle, LAHAT ng resting ay orphan.
+        """
+        if not isinstance(self.executor, KalshiLiveExecutor):
+            return
+        if self._client is None:
+            return
+        try:
+            orders = await self._client.get_resting_orders()
+        except Exception as e:
+            filelog.warning("Resting-order reconcile skipped: %s", e)
+            return
+        known = self._cycle.ticker if self._cycle is not None else None
+        orphans = [o for o in orders if o.get("ticker") != known]
+        if not orphans:
+            return
+        cancelled = 0
+        for o in orphans:
+            oid = str(o.get("order_id") or o.get("id") or "")
+            if not oid:
+                continue
+            try:
+                await self._client.cancel_order(oid)
+                cancelled += 1
+            except Exception as e:
+                filelog.warning("Failed to cancel orphan order %s: %s",
+                                oid, e)
+        if cancelled:
+            kept = " (kept the restored straddle's orders)" if known else ""
+            self.log("WARN", f"Startup cleanup — cancelled {cancelled} "
+                             f"orphaned resting order(s) left on Kalshi from a "
+                             f"previous session{kept}")
+
+    async def _loop(self) -> None:
+        """Laging-bukas: nagsa-scan ng market feed (cards + chart) kahit
+        STOPPED; nagta-trade lang kapag RUNNING at handa na ang session."""
+        # Public client para sa scanning — laging available
+        env = str(self._db.get_setting("env", "prod"))
+        if self._client is None:
+            try:
+                self._client = KalshiClient(env=env)
+                await self._ensure_series_tickers()
+            except Exception as e:
+                self.log("WARN", f"Kalshi market feed init failed: {e}")
+
+        while True:
+            try:
+                trading = self.state is BotState.RUNNING and self._session_ready
+                if trading and self._cycle is None:
+                    await self._scan_and_place(place=True)
+                    await asyncio.sleep(self._scan_interval())
+                elif trading and self._cycle.state is CycleState.UNHEDGED_HOLD:
+                    await self._scan_and_place(place=False)
+                    await self._watch_settlement()
+                    await asyncio.sleep(SETTLE_POLL_SECS)
+                elif trading:
+                    await self._monitor_cycle()
+                    await asyncio.sleep(FILL_POLL_SECS)
+                else:
+                    # STOPPED o naghahanda pa: read-only market feed lang
+                    await self._scan_and_place(place=False)
+                    await asyncio.sleep(self._scan_interval())
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                filelog.exception("Kalshi loop error:")
+                self.log("WARN", f"Loop error: {e} — retrying in 10s")
+                await asyncio.sleep(10)
+
+    async def _setup(self, mode: str) -> None:
+        env = str(self._db.get_setting("env", "prod"))
+        if mode == "live":
             key_id = secret_store.get_secret(secret_store.KEY_KALSHI_API_ID)
             pem = secret_store.get_secret(secret_store.KEY_KALSHI_PEM)
             if not pem:
-                pem = str(self._db.get_setting("pem_path", "")).strip() or None
+                pem = str(self._db.get_setting("pem_path", "")) or None
             if not key_id or not pem:
                 raise KalshiError(
                     "Kalshi API Key ID / RSA private key not set in Settings"
                 )
-            client = KalshiClient(env=env, key_id=key_id, private_key_pem=pem)
-            balance = await client.get_balance()  # creds check
-            executor = KalshiLiveExecutor(self._db, client)
-            self._live_client = client
-            self.executor = executor
-            self._live_books = {}
-            self._live_price_task = asyncio.create_task(self._live_price_loop())
-            self._live_balance_task = asyncio.create_task(
-                self._live_balance_loop())
+            self._client = KalshiClient(env=env, key_id=key_id,
+                                        private_key_pem=pem)
+            balance = await self._client.get_balance()  # creds check
+            self.executor = KalshiLiveExecutor(self._client)
+            self.modeChanged.emit("LIVE")
             self.liveBalance.emit(balance)
+            self._balance_task = asyncio.create_task(self._balance_loop())
             self.log("INFO", f"LIVE mode ready [{env}] — balance "
                              f"${balance:,.2f}")
-            self.modeChanged.emit("LIVE")
-            self._restore_position()
-        except Exception as e:
-            filelog.exception("Kalshi live setup failed (full traceback):")
-            self.log("ERROR", f"Live setup failed: {e} — falling back to "
-                              "PAPER mode")
-            self.executor = PaperExecutor(self._db)
+        else:
+            self._client = KalshiClient(env=env)  # public data lang
+            self.executor = KalshiPaperExecutor()
             self.modeChanged.emit("PAPER")
-        finally:
-            self._live_pending = False
+            self.log("INFO", f"PAPER mode — simulated fills on real {env} "
+                             "market data")
+        await self._ensure_series_tickers()
 
-    async def _live_price_loop(self) -> None:
-        """Resolve/rollover the Kalshi market + refresh best bid/ask every 5s.
+    async def _ensure_series_tickers(self) -> None:
+        """Kapag walang naka-set na sports series, i-discover sa API."""
+        raw = str(self._db.get_setting("series_tickers", "")).strip()
+        if raw:
+            return
+        try:
+            series = await self._client.get_series_list("Sports")
+        except Exception as e:
+            self.log("WARN", f"Sports series discovery failed: {e} — "
+                             "set Series Tickers manually in Settings")
+            return
+        tickers = [s.get("ticker", "") for s in series if s.get("ticker")]
+        # Unahin ang major leagues (baseball/basketball/football/hockey/
+        # soccer) — pero kumuha ng MARAMING sports series para hindi puro
+        # isang sport lang ang lumalabas
+        preferred_order = (
+            "KXMLBGAME", "KXWNBAGAME", "KXNBAGAME", "KXNFLGAME",
+            "KXNHLGAME", "KXNCAAFGAME", "KXNCAABGAME",
+            "KXEPLGAME", "KXUCLGAME", "KXLALIGAGAME", "KXSERIEAGAME",
+            "KXBUNDESGAME", "KXLIGUE1GAME", "KXMLSGAME", "KXLIGAMXGAME",
+            "KXUFCGAME", "KXATPGAME", "KXWTAGAME",
+        )
+        game_series = [t for t in tickers if "GAME" in t.upper()]
+        preferred = [t for t in preferred_order if t in tickers]
+        rest = [t for t in game_series if t not in preferred]
+        chosen = (preferred + rest)[:14] or tickers[:14]
+        if chosen:
+            self._db.set_setting("series_tickers", ",".join(chosen))
+            self.log("INFO", f"Discovered {len(chosen)} sports series: "
+                             f"{', '.join(chosen)} (all available: "
+                             f"{len(tickers)}) — editable in Settings")
 
-        The market is the KXBTCD above/below strike nearest to this period's
-        open ("price to beat"). On a new period (and while flat) we re-discover
-        so the pivot strike tracks the fresh open.
-        """
-        assert isinstance(self.executor, KalshiLiveExecutor)
-        fetch_failed_logged = False
-        current_period = self._aligned_period_start()
-        while True:
+    # ------------------------------------------------------------------ scan
+
+    def _scan_config(self) -> ScanConfig:
+        g = self._db.get_setting
+        return ScanConfig(
+            entry_price_cents=int(float(g("entry_price_cents",
+                                          DEFAULTS["entry_price_cents"]))),
+            min_volume=int(float(g("min_volume", DEFAULTS["min_volume"]))),
+            min_secs_to_close=float(g("min_close_mins",
+                                      DEFAULTS["min_close_mins"])) * 60,
+            max_secs_to_close=float(g("max_close_hours",
+                                      DEFAULTS["max_close_hours"])) * 3600,
+        )
+
+    def _sentinel_config(self) -> SentinelConfig:
+        g = self._db.get_setting
+        return SentinelConfig(
+            hedge_timeout_secs=float(g("hedge_timeout_secs",
+                                       DEFAULTS["hedge_timeout_secs"])),
+            hedge_max_price_cents=int(float(g("hedge_max_price",
+                                              DEFAULTS["hedge_max_price"]))),
+            hedge_retries=int(float(g("hedge_retries",
+                                      DEFAULTS["hedge_retries"]))),
+        )
+
+    def _scan_interval(self) -> float:
+        return float(self._db.get_setting("scan_interval_secs",
+                                          SCAN_INTERVAL_SECS))
+
+    async def _scan_and_place(self, place: bool = True) -> None:
+        cfg = self._scan_config()
+        series = [s.strip() for s in
+                  str(self._db.get_setting("series_tickers", "")).split(",")
+                  if s.strip()]
+        now = time.time()
+        found: list[MarketCandidate] = []
+        rows: list[dict] = []
+
+        for ticker in series[:14]:
             try:
-                open_price = self._feed.daily_open
-                aligned = self._aligned_period_start()
-                need_market = (
-                    self.executor.market is None
-                    or (aligned != current_period
-                        and self.executor.position is None)
-                )
-                if need_market and open_price is not None:
-                    period_start = dt.datetime.fromtimestamp(
-                        aligned, dt.timezone.utc)
-                    market = await find_btc_market(
-                        self._live_client, self._timeframe, period_start,
-                        open_price,
-                    )
-                    self.executor.set_market(market)
-                    self._live_books = {}
-                    current_period = aligned
-                    self.log("INFO", f"Kalshi market — {market.question} "
-                                     f"[{market.ticker}]")
-
-                market = self.executor.market
-                if market is not None:
-                    book = await self._live_client.get_orderbook(market.ticker)
-                    prices = best_prices_from_orderbook(book)
-                    for side in ("UP", "DOWN"):
-                        self._live_books[side] = best_prices_for_side(
-                            prices, side)
-                fetch_failed_logged = False
-            except asyncio.CancelledError:
-                raise
+                data = await self._client.get_markets(
+                    series_ticker=ticker, limit=200)
             except Exception as e:
-                if not fetch_failed_logged:
-                    filelog.exception("Live order book fetch failed:")
-                    self.log("WARN", f"Live order book fetch failed: {e}")
-                    fetch_failed_logged = True
-            await asyncio.sleep(5)
+                self.log("WARN", f"Market scan failed for {ticker}: {e}")
+                continue
+            for m in data.get("markets", []):
+                cand = _to_candidate(m)
+                if cand is None:
+                    continue
+                ok, reason = is_candidate(cand, now, cfg)
+                rows.append({
+                    "ticker": cand.ticker, "title": cand.title,
+                    "yes_bid": cand.yes_bid, "yes_ask": cand.yes_ask,
+                    "no_bid": cand.no_bid, "no_ask": cand.no_ask,
+                    "volume": cand.volume,
+                    "status": "READY" if ok else reason,
+                })
+                if ok and cand.ticker not in self._traded_tickers:
+                    found.append(cand)
 
-    def _aligned_period_start(self) -> float:
-        now = dt.datetime.now(dt.timezone.utc)
-        return period_start_utc(now, self._timeframe).timestamp()
+        rows.sort(key=lambda r: -r["volume"])
+        # Ipasa ang MARAMI (hindi lang 50) — may search na sa UI para
+        # mahanap ang kahit anong game/team
+        self.marketsScanned.emit(rows[:400])
 
-    async def _live_balance_loop(self) -> None:
+        # I-focus ang chart (kapag walang aktibong straddle). Kung may pinili
+        # ang user (carousel/click), respetuhin iyon basta nandiyan pa ang
+        # market. Kung auto: UNAHIN ang READY na 50/50 (gumagalaw sa ~50%);
+        # ang top-volume ay madalas tapos nang laban (flat sa ~100%).
+        if rows and self._cycle is None:
+            if (self._chart_focus_user and self._chart_focus is not None
+                    and not any(r["ticker"] == self._chart_focus[0]
+                                for r in rows)):
+                self._chart_focus_user = False  # nawala na — bumalik sa auto
+            if not self._chart_focus_user:
+                ready = [r for r in rows if r.get("status") == "READY"]
+                focus = ready[0] if ready else rows[0]
+                self._chart_focus = (focus["ticker"], focus["title"])
+                ymid = (focus["yes_bid"] + focus["yes_ask"]) / 2.0
+                nmid = (focus["no_bid"] + focus["no_ask"]) / 2.0
+                self.marketTick.emit(focus["ticker"], focus["title"],
+                                     ymid, nmid)
+
+        # place=False: ipinakita na ang cards/chart, pero hindi maglalagay
+        # ng bago. Iba-iba ang dahilan — piliin ang tamang status text.
+        if not place:
+            if (self._cycle is not None
+                    and self._cycle.state is CycleState.UNHEDGED_HOLD):
+                self.strategyStatus.emit(
+                    "HOLDING unhedged position to settlement — new entries "
+                    f"paused ({len(rows)} live markets)")
+            elif self.state is BotState.RUNNING:
+                self.strategyStatus.emit(
+                    f"PREPARING session… ({len(rows)} live markets)")
+            else:
+                self.strategyStatus.emit(
+                    f"MONITORING {len(rows)} live markets — press START BOT "
+                    "to trade")
+            return
+
+        ranked = rank_candidates(
+            [c for c in found if c.ticker not in self._traded_tickers],
+            now, cfg,
+        )
+        if not ranked:
+            self.strategyStatus.emit(
+                f"SCANNING — {len(rows)} markets checked, none in the "
+                f"{cfg.min_entry_cents}-{cfg.max_entry_cents}¢ 50/50 band yet"
+            )
+            return
+
+        risk = float(self._db.get_setting("risk_usd", DEFAULTS["risk_usd"]))
+        entry = cfg.entry_price_cents
+
+        # Post-only guard: ang resting BUY @ entry ay dapat HINDI tumawid sa
+        # book (entry < ask sa PAREHONG side), kung hindi ay ire-reject ng
+        # Kalshi ("post only cross"). Piliin ang unang candidate na ligtas.
+        target = None
+        for cand in ranked:
+            if entry < cand.yes_ask and entry < cand.no_ask:
+                target = cand
+                break
+        if target is None:
+            self.strategyStatus.emit(
+                f"WAITING — {len(ranked)} candidate(s) found but a {entry}¢ "
+                f"bid would cross the book (ask ≤ {entry}¢); waiting for a "
+                "wider spread"
+            )
+            return
+
+        count = straddle_sizing(risk, entry, entry)
+        if count < 1:
+            self.strategyStatus.emit(
+                f"WAITING — risk ${risk:.2f} too small for one "
+                f"{entry}¢+{entry}¢ pair"
+            )
+            return
+
+        try:
+            await self.executor.place_straddle(target.ticker, entry, count)
+        except Exception as e:
+            if "post only cross" in str(e).lower():
+                # Gumalaw ang book sa pagitan ng scan at placement — hindi
+                # ito error; susubukan ulit sa susunod na scan.
+                filelog.info("Post-only would cross on %s — skipping this "
+                             "round", target.ticker)
+                self.log("WARN", f"Market moved on {target.ticker} — "
+                                 f"{entry}¢ bid would cross the book; "
+                                 "will retry next scan")
+                return
+            filelog.exception("Straddle placement failed:")
+            self.log("ERROR", f"Straddle placement failed on "
+                              f"{target.ticker}: {e}")
+            return
+
+        self._cycle = StraddleCycle(
+            ticker=target.ticker, count=count, entry_cents=entry,
+            started_ts=now, cfg=self._sentinel_config(),
+        )
+        self._cycle_title = target.title
+        self._traded_tickers.add(target.ticker)
+        self._persist_cycle()
+        cost = count * entry * 2 / 100.0
+        for side in ("YES", "NO"):
+            self._db.add_trade(
+                market=target.ticker, side=side, action="BUY",
+                price=entry / 100.0, size=count * entry / 100.0,
+                status="OPEN",
+            )
+        self.tradeExecuted.emit()
+        tag = self.executor.MODE
+        self.log("TRADE", f"[{tag}] STRADDLE placed on {target.ticker}: "
+                          f"BUY {count} YES @ {entry}¢ + {count} NO @ {entry}¢ "
+                          f"(${cost:,.2f}) — {target.title}")
+        self.strategyStatus.emit(
+            f"STRADDLE WORKING — {target.ticker} ({count} pairs @ {entry}¢)"
+        )
+
+    # --------------------------------------------------------------- monitor
+
+    async def _monitor_cycle(self) -> None:
+        cycle = self._cycle
+        assert cycle is not None
+        prices: dict = {}
+        try:
+            book = await self._client.get_orderbook(cycle.ticker)
+            prices = best_prices_from_orderbook(book)
+        except Exception as e:
+            filelog.warning("Orderbook fetch failed for %s: %s",
+                            cycle.ticker, e)
+
+        # I-focus ang chart sa aktibong straddle market
+        self._chart_focus = (cycle.ticker, self._cycle_title or cycle.ticker)
+        if prices.get("yes_bid") and prices.get("yes_ask"):
+            ymid = (prices["yes_bid"] + prices["yes_ask"]) / 2.0
+            nmid = (prices["no_bid"] + prices["no_ask"]) / 2.0
+            self.marketTick.emit(
+                cycle.ticker, self._cycle_title or cycle.ticker, ymid, nmid
+            )
+
+        # Paper: ipakain ang book snapshot para gumalaw ang simulated fills
+        if isinstance(self.executor, KalshiPaperExecutor) and prices:
+            self.executor.on_book(prices)
+
+        yes_filled, no_filled = await self.executor.get_fills(cycle.ticker)
+
+        lagging = cycle.lagging_side
+        lag_ask = None
+        if lagging is not None and prices:
+            lag_ask = prices.get("yes_ask" if lagging == "YES" else "no_ask")
+
+        decision = cycle.on_tick(time.time(), yes_filled, no_filled, lag_ask)
+        self._persist_cycle()
+        self.straddleStatus.emit(
+            f"{cycle.ticker}: {cycle.state.value} — YES {yes_filled}/"
+            f"{cycle.count}, NO {no_filled}/{cycle.count} — {decision.reason}"
+        )
+
+        if decision.action == "WAIT":
+            return
+
+        if decision.action == "CANCEL_ALL":
+            await self.executor.cancel_all(cycle.ticker)
+            self._db.add_trade(
+                market=cycle.ticker, side="PAIR", action="CANCEL",
+                price=cycle.entry_cents / 100.0, size=0.0, status="CANCELLED",
+            )
+            self.log("INFO", f"Straddle cancelled on {cycle.ticker} — "
+                             f"{decision.reason}")
+            self._finish_cycle()
+            return
+
+        if decision.action == "HEDGE":
+            side = cycle.lagging_side
+            if side is None:
+                return
+            self.log("WARN", decision.reason)
+            await self.executor.cancel(cycle.ticker, side)
+            need = cycle.count - (yes_filled if side == "YES" else no_filled)
+            filled = await self.executor.hedge(
+                cycle.ticker, side, cycle.cfg.hedge_max_price_cents, need,
+                prices=prices,
+            )
+            if filled >= need:
+                cycle.mark_hedged(cycle.cfg.hedge_max_price_cents)
+                self._record_completed()
+            return
+
+        if decision.action == "GIVE_UP":
+            self.log("ERROR", f"{cycle.ticker}: {decision.reason}")
+            self._persist_cycle()  # mananatili hanggang settlement
+            return
+
+        if decision.action == "DONE":
+            self._record_completed()
+
+    def _record_completed(self) -> None:
+        """I-record ang natapos na cycle (LOCKED / HEDGED) at mag-reset."""
+        cycle = self._cycle
+        assert cycle is not None
+        pnl_cents = cycle.realized_pnl_cents()
+        if pnl_cents is None:
+            return
+        pnl = pnl_cents / 100.0
+        tag = self.executor.MODE
+        if cycle.state is CycleState.LOCKED:
+            action, note = "SETTLE", "both sides filled — $1.00/pair locked"
+            price = cycle.entry_cents / 100.0
+        else:
+            action = "HEDGE"
+            note = (f"scratch via sentinel @ "
+                    f"{cycle.hedge_price_cents or 0}¢ hedge")
+            price = (cycle.hedge_price_cents or 0) / 100.0
+        pairs = min(cycle.yes_filled, cycle.no_filled)
+        self._db.add_trade(
+            market=cycle.ticker, side="PAIR", action=action,
+            price=price, size=pairs * 1.0, status="FILLED", pnl=pnl,
+        )
+        self.log("TRADE", f"[{tag}] {cycle.ticker} {cycle.state.value} — "
+                          f"{pairs} pairs, PnL {pnl:+,.2f} USD ({note})")
+        self.tradeExecuted.emit()
+        self.strategyStatus.emit(
+            f"FLAT — last cycle {cycle.state.value}, PnL {pnl:+,.2f} USD"
+        )
+        if isinstance(self.executor, KalshiLiveExecutor):
+            asyncio.create_task(self._refresh_balance())
+        self._finish_cycle()
+
+    async def _watch_settlement(self) -> None:
+        """UNHEDGED_HOLD: hintayin ang market settlement, i-record ang PnL."""
+        cycle = self._cycle
+        assert cycle is not None
+        try:
+            market = await self._client.get_market(cycle.ticker)
+        except Exception as e:
+            filelog.warning("Settlement check failed: %s", e)
+            return
+        status = str(market.get("status", "")).lower()
+        result = str(market.get("result", "")).lower()
+        self.straddleStatus.emit(
+            f"{cycle.ticker}: UNHEDGED_HOLD — waiting for settlement "
+            f"(status: {status or '?'})"
+        )
+        if status not in ("settled", "finalized") or result not in ("yes", "no"):
+            return
+        held = "YES" if cycle.yes_filled > cycle.no_filled else "NO"
+        won = held.lower() == result
+        pnl = cycle.settlement_pnl_cents(won) / 100.0
+        held_count = max(cycle.yes_filled, cycle.no_filled)
+        self._db.add_trade(
+            market=cycle.ticker, side=held, action="SETTLE",
+            price=1.0 if won else 0.0, size=held_count * 1.0,
+            status="FILLED", pnl=pnl,
+        )
+        self.log("TRADE", f"[{self.executor.MODE}] {cycle.ticker} settled "
+                          f"{result.upper()} — held {held}, "
+                          f"PnL {pnl:+,.2f} USD")
+        self.tradeExecuted.emit()
+        self._finish_cycle()
+
+    # -------------------------------------------------------------- balance
+
+    async def _balance_loop(self) -> None:
         failed_logged = False
         while True:
             try:
@@ -279,7 +698,7 @@ class KalshiEngine(QObject):
                     failed_logged = True
                 await asyncio.sleep(10)
 
-    async def _refresh_live_balance(self) -> None:
+    async def _refresh_balance(self) -> None:
         try:
             balance = await self.executor.get_balance()
             if balance is not None:
@@ -287,266 +706,314 @@ class KalshiEngine(QObject):
         except Exception as e:
             filelog.warning("Balance refresh failed: %s", e)
 
-    def fetch_range_history(self, interval: str, limit: int) -> None:
+    # ----------------------------------------------------------- history sync
+
+    async def _authed_client(self) -> tuple[KalshiClient, bool]:
+        """(client, owned) — authenticated na Kalshi client.
+
+        Kung LIVE ang session, gamitin ang existing na naka-auth na client;
+        kung hindi (STOPPED o paper feed lang, na public), gumawa ng
+        pansamantala mula sa naka-save na credentials. `owned=True` =
+        tayo ang gumawa kaya tayo rin ang magsasara.
+        """
+        if self._client is not None and self._client.has_auth:
+            return self._client, False
+
+        key_id = secret_store.get_secret(secret_store.KEY_KALSHI_API_ID)
+        pem = secret_store.get_secret(secret_store.KEY_KALSHI_PEM)
+        if not pem:
+            pem = str(self._db.get_setting("pem_path", "")).strip() or None
+        if not key_id or not pem:
+            raise KalshiError(
+                "Add your Kalshi API Key ID and RSA private key in Settings "
+                "first — they are needed to read your account history."
+            )
+        env = str(self._db.get_setting("env", "prod"))
+        return KalshiClient(env=env, key_id=key_id,
+                            private_key_pem=pem), True
+
+    async def sync_fills_from_kalshi(self) -> tuple[int, int]:
+        """I-import ang TOTOONG fill history mula sa Kalshi papasok sa DB.
+
+        Ang lokal na tala ay isinusulat kapag NAG-PLACE ng order — kaya
+        kung na-restart ang app o napalampas ang isang fill, hindi
+        tumutugma ang Trades table sa totoong nangyari sa account. Dito
+        kinukuha ang ground truth mula sa /portfolio/fills at idinadagdag
+        ang mga bagong fill lang (dedup gamit ang fill_id).
+
+        Ibinabalik: (bilang na na-import, kabuuang fills na nakita).
+
+        Gumagawa ito ng SARILING authenticated client — read-only account
+        query lang ito, kaya hindi kailangang naka-START ang bot (ang
+        always-on feed client ay public/walang auth).
+        """
+        client, owned = await self._authed_client()
         try:
-            asyncio.create_task(self._fetch_range(interval, limit))
-        except RuntimeError:
-            pass  # walang running event loop (hal. sa UI tests)
-
-    async def _fetch_range(self, interval: str, limit: int) -> None:
-        try:
-            rows = await self._feed.fetch_klines(interval, limit)
-            self.rangeHistoryLoaded.emit(rows)
-        except Exception as e:
-            filelog.exception("Range history fetch failed:")
-            self.log("WARN", f"History fetch failed ({interval}): {e}")
-
-    def _restore_position(self) -> None:
-        period_start = dt.datetime.fromtimestamp(
-            self._aligned_period_start(), dt.timezone.utc
-        )
-        position, level, message = decide_restore(
-            self._db.load_open_position(), self.executor.MODE, period_start
-        )
-        if position is not None:
-            self.executor.position = position
-        elif message:
-            self._db.clear_open_position()
-        if message:
-            self.log(level, message)
-
-    def log(self, level: str, message: str) -> None:
-        self._db.add_log(level, message)
-        self.logAdded.emit(level, message)
-        py_level = {"WARN": logging.WARNING, "ERROR": logging.ERROR}.get(
-            level, logging.INFO
-        )
-        filelog.log(py_level, message)
-
-    def _load_config(self) -> StrategyConfig:
-        g = self._db.get_setting
-        base = StrategyConfig()
-        cfg = StrategyConfig(
-            min_stretch_pct=float(g("min_stretch_pct", base.min_stretch_pct)),
-            max_stretch_pct=float(g("max_stretch_pct", base.max_stretch_pct)),
-            profit_target_pct=float(g("profit_target_pct",
-                                      base.profit_target_pct)),
-            volume_spike_mult=float(g("volume_spike_mult",
-                                      base.volume_spike_mult)),
-            premium_threshold_pct=float(
-                g("premium_threshold_pct", base.premium_threshold_pct)
-            ),
-        )
-        self._timeframe = str(g("market_timeframe", "1h"))
-        if self._timeframe not in TF_TO_INTERVAL:
-            self._timeframe = "1h"
-        self._price_scale = stretch_scale(self._timeframe)
-        cfg = scale_config_for_timeframe(cfg, self._timeframe)
-        self._period_secs = cfg.period_hours * 3600.0
-        if self._timeframe == "daily":
-            now = dt.datetime.now(dt.timezone.utc)
-            offset = period_start_utc(now, "daily").timestamp() % 86400.0
-            cfg = dataclasses.replace(cfg, anchor_offset_secs=offset)
-        return cfg
-
-    # ------------------------------------------------------------- handlers
-
-    def _handle_price(self, price: float) -> None:
-        self.priceUpdated.emit(price)
-        stretch = self._feed.pct_from_open
-        if stretch is None:
-            return
-        self.stretchUpdated.emit(stretch)
-        if self.state is BotState.RUNNING:
-            self._evaluate_strategy(stretch)
-
-    def _handle_daily_open(self, open_price: float) -> None:
-        self.dailyOpenUpdated.emit(open_price)
-        self.log("INFO", f"Period open / price to beat = ${open_price:,.2f}")
-
-    # ------------------------------------------------------------- strategy
-
-    def _evaluate_strategy(self, stretch: float) -> None:
-        now = dt.datetime.now(dt.timezone.utc)
-        self._reset_daily_counter(now)
-
-        if self._live_pending:
-            self.strategyStatus.emit("CONNECTING — setting up Kalshi live mode…")
-            return
-        if self._order_in_flight:
-            return  # a live BUY/SELL task is running; wait for it to settle
-
-        live = isinstance(self.executor, KalshiLiveExecutor)
-        if live and self.executor.market is not None:
-            market = f"{self.executor.market.question} [LIVE]"
-        else:
-            market = (f"BTC Up/Down [{self._timeframe}] "
-                      f"{now.strftime('%Y-%m-%d %H:%M')} [PAPER]")
-
-        if self.executor.position is None:
-            if self._db.get_setting("econ_block_date") == now.date().isoformat():
-                self.strategyStatus.emit(
-                    "PAUSED — economic data day (Fed/CPI), entries blocked today")
-                return
-
-            if live:
-                if self.executor.market is None:
-                    self.strategyStatus.emit(
-                        "WAITING — resolving Kalshi BTC market…")
-                    return
-                book = self._live_books.get(target_side(stretch))
-                share_price = book[1] if book else None
-                if share_price is None:
-                    self.strategyStatus.emit("WAITING — no live order book data yet")
-                    return
-            else:
-                share_price = estimate_otm_share_price(stretch, self._price_scale)
-
-            sig = evaluate_entry(now, stretch, share_price, self._trades_today,
-                                 self.config)
-            if sig.action is not Action.ENTER:
-                self.strategyStatus.emit(f"WATCHING — {sig.reason}")
-                key = re.sub(r"[0-9.+-]+", "#", sig.reason)
-                if key != self._watch_log_key:
-                    self._watch_log_key = key
-                    self.log("INFO", f"Watching: {sig.reason}")
-                return
-
-            # Death trap guards (same as Polymarket)
-            if self._entry_vetoed(stretch):
-                return
-
-            risk = float(self._db.get_setting("risk_usd", DEFAULT_RISK_USD))
-            if live:
-                self._order_in_flight = True
-                asyncio.create_task(
-                    self._live_buy(market, sig.side, share_price, risk,
-                                   sig.reason))
-                return
-            self._paper_buy(market, sig.side, share_price, risk, sig.reason)
-        else:
-            pos = self.executor.position
-            if live:
-                book = self._live_books.get(pos.side)
-                share_price = book[0] if book else None
-                if share_price is None:
-                    self.strategyStatus.emit("WAITING — no live order book data yet")
-                    return
-            else:
-                share_price = position_share_price(
-                    stretch, pos.side, self._price_scale)
-
-            sig = evaluate_exit(now, pos, share_price, self.config)
-            if sig.action is not Action.EXIT:
-                self.strategyStatus.emit(
-                    f"IN POSITION: {pos.side} @ {pos.entry_price:.2f} "
-                    f"(now ~{share_price:.2f}) — {sig.reason}")
-                return
-            if live:
-                self._order_in_flight = True
-                asyncio.create_task(
-                    self._live_sell(market, share_price, sig.reason))
-                return
-            self._paper_sell(market, share_price, sig.reason)
-
-    def _entry_vetoed(self, stretch: float) -> bool:
-        """Volume-escalation + Coinbase-premium death-trap guards."""
-        escalating, why = is_volume_escalating(
-            self._feed.hourly_volumes,
-            recent_hours=self.config.volume_recent_hours,
-            baseline_hours=self.config.volume_baseline_hours,
-            spike_mult=self.config.volume_spike_mult,
-        )
-        if escalating:
-            if not self._volume_veto_logged:
-                self.log("WARN", f"Entry blocked — {why}")
-                self._volume_veto_logged = True
-            self.strategyStatus.emit(f"BLOCKED — {why}")
-            return True
-        self._volume_veto_logged = False
-
-        if self._coinbase.last_price is not None:
-            premium = coinbase_premium_pct(
-                self._coinbase.last_price, self._feed.last_price)
-            exploding, why = is_premium_exploding(
-                premium, stretch, self.config.premium_threshold_pct)
-            if exploding:
-                if not self._premium_veto_logged:
-                    self.log("WARN", f"Entry blocked — {why}")
-                    self._premium_veto_logged = True
-                self.strategyStatus.emit(f"BLOCKED — {why}")
-                return True
-            self._premium_veto_logged = False
-        return False
-
-    # -------------------------------------------------------- trade helpers
-
-    def _paper_buy(self, market: str, side: str, share_price: float,
-                   risk: float, reason: str) -> None:
-        try:
-            pos = self.executor.buy(market, side, share_price, risk)
-        except Exception as e:
-            filelog.exception("BUY order failed:")
-            self.log("ERROR", f"BUY order failed: {e}")
-            self.strategyStatus.emit(f"ERROR — BUY failed: {e}")
-            return
-        self._trades_today += 1
-        self.log("TRADE", f"[{self.executor.MODE}] BUY {pos.shares:,.1f} "
-                          f"{side} @ {share_price:.2f} (${risk:.2f}) — {reason}")
-        self.tradeExecuted.emit()
-        self.strategyStatus.emit(f"IN POSITION: {side} @ {share_price:.2f}")
-
-    def _paper_sell(self, market: str, share_price: float,
-                    reason: str) -> None:
-        pos = self.executor.position
-        try:
-            pnl = self.executor.sell(market, share_price)
-        except Exception as e:
-            filelog.exception("SELL order failed:")
-            self.log("ERROR", f"SELL order failed: {e}")
-            self.strategyStatus.emit(f"ERROR — SELL failed: {e}")
-            return
-        self.log("TRADE", f"[{self.executor.MODE}] SELL {pos.side} @ "
-                          f"{share_price:.2f} — PnL {pnl:+,.2f} USD — {reason}")
-        self.tradeExecuted.emit()
-        self.strategyStatus.emit(f"FLAT — last PnL {pnl:+,.2f} USD")
-
-    async def _live_buy(self, market: str, side: str, share_price: float,
-                        risk: float, reason: str) -> None:
-        try:
-            pos = await self.executor.buy(market, side, share_price, risk)
-            self._trades_today += 1
-            self.log("TRADE", f"[LIVE] BUY {pos.shares:,.0f} {side} @ "
-                              f"{share_price:.2f} (${risk:.2f}) — {reason}")
-            self.tradeExecuted.emit()
-            self.strategyStatus.emit(f"IN POSITION: {side} @ {share_price:.2f}")
-            await self._refresh_live_balance()
-        except Exception as e:
-            filelog.exception("LIVE BUY failed:")
-            self.log("ERROR", f"BUY order failed: {e}")
-            self.strategyStatus.emit(f"ERROR — BUY failed: {e}")
+            fills = await client.get_fills(limit=200)
+            positions = await client.get_positions()
+            settlements = await client.get_settlements(limit=200)
         finally:
-            self._order_in_flight = False
+            if owned:
+                await client.aclose()
+        imported = 0
+        # (market, side) na may totoong fills — para mapalitan ang lokal na
+        # placement rows at hindi madoble ang parehong straddle
+        filled_keys: set[tuple[str, str]] = set()
 
-    async def _live_sell(self, market: str, share_price: float,
-                         reason: str) -> None:
-        pos = self.executor.position
-        try:
-            pnl = await self.executor.sell(market, share_price)
-            self.log("TRADE", f"[LIVE] SELL {pos.side} @ {share_price:.2f} — "
-                              f"PnL {pnl:+,.2f} USD — {reason}")
+        for f in fills:
+            ticker = str(f.get("ticker") or f.get("market_ticker") or "")
+            # Ang outcome_side ang nagsasabi kung ANONG kontrata ang
+            # napunta sa atin (yes/no) — iyon ang totoong side natin.
+            outcome = str(f.get("outcome_side") or f.get("side") or "").lower()
+            side = outcome.upper() or "?"
+            filled_keys.add((ticker, side))
+
+            fill_id = str(f.get("fill_id") or f.get("trade_id") or "")
+            if not fill_id:
+                continue
+            meta = f"kalshi_fill:{fill_id}"
+            if self._db.has_trade_meta(meta):
+                continue
+
+            price_key = ("yes_price_dollars" if outcome == "yes"
+                         else "no_price_dollars")
+            price = float(f.get(price_key) or 0.0)
+            count = float(f.get("count_fp") or f.get("count") or 0.0)
+            ts_raw = str(f.get("created_time") or "")
+
+            self._db.add_trade(
+                market=ticker,
+                side=side,
+                action="BUY",
+                price=price,
+                size=count * price,
+                status="FILLED",
+                meta=meta,
+                ts=ts_raw or None,
+            )
+            imported += 1
+
+        # Ang exchange ang ground truth: itago ang mga "RESTING" placement
+        # row na napalitan na ng totoong fills
+        superseded = 0
+        for ticker, side in filled_keys:
+            superseded += self._db.supersede_open_trades(ticker, side)
+
+        # Positions muna (bukas-pa-nagsara edge), tapos settlements — ito
+        # ang totoong pinagmumulan ng PnL dahil BURADO na ang settled na
+        # market sa /portfolio/positions. Parehong meta key ("kalshi_settle:
+        # {ticker}") kaya hindi madoble.
+        settled = self._import_realized_pnl(positions)
+        settled += self._import_settlements(settlements)
+
+        if imported or superseded or settled:
             self.tradeExecuted.emit()
-            self.strategyStatus.emit(f"FLAT — last PnL {pnl:+,.2f} USD")
-            await self._refresh_live_balance()
-        except Exception as e:
-            filelog.exception("LIVE SELL failed:")
-            self.log("ERROR", f"SELL order failed: {e}")
-            self.strategyStatus.emit(f"ERROR — SELL failed: {e}")
-        finally:
-            self._order_in_flight = False
+            bits = [f"Synced {imported} new fill(s) from Kalshi "
+                    f"({len(fills)} in history)"]
+            if superseded:
+                bits.append(f"replaced {superseded} placeholder row(s)")
+            if settled:
+                bits.append(f"recorded PnL for {settled} closed market(s)")
+            self.log("INFO", " — ".join(bits))
+        else:
+            # Walang nagbago — huwag punuin ang Recent Logs / DB ng
+            # paulit-ulit na "nothing new" tuwing pinipindot ang Sync. Ang
+            # transient status sa Trades panel na ang nagsasabi nito.
+            filelog.info("Kalshi sync: already up to date (%d fills in "
+                         "history, nothing new)", len(fills))
+        await self._refresh_balance()
+        return imported, len(fills)
 
-    def _reset_daily_counter(self, now: dt.datetime) -> None:
-        period = self._aligned_period_start()
-        if self._trades_period != period:
-            self._trades_period = period
-            self._trades_today = 0
+    def _import_realized_pnl(self, positions: list[dict]) -> int:
+        """Magtala ng SETTLE row kada TAPOS NANG market na may kita/lugi.
+
+        Ang fill history ay nagsasabi lang ng BINILI natin — ang kita ay
+        nasa positions (`realized_pnl_dollars`). Kung hindi ito kukunin,
+        $0.00 ang ipapakita ng Statistics kahit kumita ang bot (nangyayari
+        ito kapag na-restart ang app bago matapos ang cycle).
+
+        Net PnL = realized − fees. Ini-update kung nagbago ang halaga
+        kaysa magdagdag ng dobleng row.
+        """
+        recorded = 0
+        for pos in positions:
+            ticker = str(pos.get("ticker") or "")
+            if not ticker:
+                continue
+            # position != 0 = bukas pa; hintayin munang magsara
+            if _dollars(pos, "position_fp") != 0:
+                continue
+            realized = _dollars(pos, "realized_pnl_dollars")
+            fees = _dollars(pos, "fees_paid_dollars")
+            if realized == 0 and fees == 0:
+                continue
+            net = round(realized - fees, 4)
+            traded = _dollars(pos, "total_traded_dollars")
+            meta = f"kalshi_settle:{ticker}"
+
+            if self._db.has_trade_meta(meta):
+                # Baka nadagdagan ang position — panatilihing tumpak
+                self._db.set_trade_pnl_by_meta(meta, net, traded)
+                continue
+            self._db.add_trade(
+                market=ticker, side="PAIR", action="SETTLE",
+                price=0.0, size=traded, status="FILLED", pnl=net, meta=meta,
+                ts=str(pos.get("last_updated_ts") or "") or None,
+            )
+            recorded += 1
+        return recorded
+
+    def _import_settlements(self, settlements: list[dict]) -> int:
+        """Magtala ng SETTLE row kada TAPOS NANG market mula sa settlement
+        history — ito ang totoong PnL na hindi na makikita sa positions.
+
+        Bawat settlement ay may yes/no counts + total costs at ang
+        market_result. Ang manalong side lang ang nagbabayad ng $1/kontrata:
+
+            payout = (result=='yes' ? yes_count : no_count) × $1
+            net    = payout − (yes_cost + no_cost) − fee
+
+        Idempotent — parehong `kalshi_settle:{ticker}` meta key kaya hindi
+        madoble sa _import_realized_pnl; ini-update lang kung nagbago.
+        """
+        recorded = 0
+        for s in settlements:
+            ticker = str(s.get("ticker") or "")
+            if not ticker:
+                continue
+            result = str(s.get("market_result") or "").lower()
+            if result not in ("yes", "no"):
+                continue  # hindi pa resolved bilang yes/no
+            yes_count = _dollars(s, "yes_count_fp")
+            no_count = _dollars(s, "no_count_fp")
+            cost = (_dollars(s, "yes_total_cost_dollars")
+                    + _dollars(s, "no_total_cost_dollars"))
+            fees = _dollars(s, "fee_cost")
+            if cost == 0 and yes_count == 0 and no_count == 0:
+                continue  # walang aktibidad
+            payout = (yes_count if result == "yes" else no_count) * 1.0
+            net = round(payout - cost - fees, 4)
+            meta = f"kalshi_settle:{ticker}"
+
+            if self._db.has_trade_meta(meta):
+                self._db.set_trade_pnl_by_meta(meta, net, round(cost, 4))
+                continue
+            self._db.add_trade(
+                market=ticker, side="PAIR", action="SETTLE",
+                price=0.0, size=round(cost, 4), status="FILLED",
+                pnl=net, meta=meta,
+                ts=str(s.get("settled_time") or "") or None,
+            )
+            recorded += 1
+        return recorded
+
+    # ---------------------------------------------------------- persistence
+
+    def _persist_cycle(self) -> None:
+        import json
+        if self._cycle is None:
+            self._db.set_setting(STRADDLE_KEY, "")
+        else:
+            payload = self._cycle.to_dict()
+            payload["mode"] = self.executor.MODE
+            self._db.set_setting(STRADDLE_KEY, json.dumps(payload))
+
+    def _finish_cycle(self) -> None:
+        self._cycle = None
+        self._db.set_setting(STRADDLE_KEY, "")
+
+    def _restore_cycle(self) -> None:
+        """I-restore ang naiwang straddle pagkatapos ng app restart."""
+        import json
+        raw = self._db.get_setting(STRADDLE_KEY, "")
+        if not raw:
+            return
+        try:
+            saved = json.loads(raw)
+        except (ValueError, TypeError):
+            self._db.set_setting(STRADDLE_KEY, "")
+            return
+        saved_mode = saved.pop("mode", "PAPER")
+        if saved_mode != self.executor.MODE:
+            level = "ERROR" if saved_mode == "LIVE" else "WARN"
+            self.log(level, (
+                f"A {saved_mode} straddle on {saved.get('ticker')} was left "
+                f"open but the bot is now in {self.executor.MODE} mode — "
+                "it cannot be tracked. Manage it on kalshi.com."
+            ))
+            self._db.set_setting(STRADDLE_KEY, "")
+            return
+        try:
+            self._cycle = StraddleCycle.from_dict(
+                saved, cfg=self._sentinel_config()
+            )
+        except (KeyError, ValueError, TypeError) as e:
+            self.log("WARN", f"Corrupt saved straddle discarded ({e})")
+            self._db.set_setting(STRADDLE_KEY, "")
+            return
+        self._traded_tickers.add(self._cycle.ticker)
+        self.log("INFO", f"Restored open straddle after restart: "
+                         f"{self._cycle.ticker} "
+                         f"({self._cycle.state.value})")
+        if saved_mode == "PAPER":
+            # Ibalik ang simulated orders sa paper executor
+            asyncio.create_task(self.executor.place_straddle(
+                self._cycle.ticker, self._cycle.entry_cents, self._cycle.count
+            ))
+
+
+def _money_cents(m: dict, dollars_key: str, cents_key: str) -> int:
+    """Presyo sa cents — suportado ang bago ("0.3800" dollar strings) at
+    lumang (integer cents) API format ng Kalshi."""
+    raw = m.get(dollars_key)
+    if raw not in (None, ""):
+        return int(round(float(raw) * 100))
+    return int(m.get(cents_key) or 0)
+
+
+def _dollars(row: dict, key: str) -> float:
+    """Fixed-point na dollar/count STRING ("0.560000", "5.00") -> float.
+    Ganito ang ibinabalik ng portfolio endpoints ng Kalshi."""
+    raw = row.get(key)
+    if raw in (None, ""):
+        return 0.0
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _to_candidate(m: dict) -> Optional[MarketCandidate]:
+    """Kalshi /markets row -> MarketCandidate; None kung kulang ang data."""
+    try:
+        # expected_expiration_time = katapusan ng game (ito ang mahalaga);
+        # ang close_time ay may +2 araw na postponement buffer
+        close_raw = m.get("expected_expiration_time") or m.get("close_time")
+        close_ts = 0.0
+        if close_raw:
+            close_ts = dt.datetime.fromisoformat(
+                str(close_raw).replace("Z", "+00:00")
+            ).timestamp()
+        yes_bid = _money_cents(m, "yes_bid_dollars", "yes_bid")
+        yes_ask = _money_cents(m, "yes_ask_dollars", "yes_ask")
+        no_bid = _money_cents(m, "no_bid_dollars", "no_bid")
+        no_ask = _money_cents(m, "no_ask_dollars", "no_ask")
+        volume = int(float(m.get("volume_fp") or m.get("volume") or 0))
+        oi = int(float(m.get("open_interest_fp") or m.get("open_interest") or 0))
+        title = str(m.get("title", m["ticker"]))
+        side_name = str(m.get("yes_sub_title", "")).strip()
+        if side_name:
+            title = f"{title} ({side_name})"
+        return MarketCandidate(
+            ticker=str(m["ticker"]),
+            title=title,
+            yes_bid=yes_bid,
+            yes_ask=yes_ask or (100 - no_bid if no_bid else 0),
+            no_bid=no_bid,
+            no_ask=no_ask or (100 - yes_bid if yes_bid else 0),
+            volume=volume,
+            close_ts=close_ts,
+            open_interest=oi,
+        )
+    except (KeyError, ValueError, TypeError):
+        return None
