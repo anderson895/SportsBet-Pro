@@ -27,7 +27,7 @@ from src.ui.kalshi_settings import KalshiSettingsPage
 from src.ui.loading_overlay import LoadingOverlay
 from src.ui.poly_box_settings import PolyBoxSettingsPage
 
-APP_VERSION = "1.5.3"
+APP_VERSION = "1.5.4"
 
 TF_LABELS = {"daily": "Daily", "4h": "4 Hours", "1h": "1 Hour", "15m": "15 Minutes"}
 

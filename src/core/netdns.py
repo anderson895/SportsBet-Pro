@@ -79,8 +79,20 @@ def _doh_query(host: str, rrtype: int) -> list[str]:
                     default=_TTL_DEFAULT,
                 )))
                 with _lock:
+                    previous = _cache.get(host)
                     _cache[host] = (time.monotonic() + ttl, ips)
-                filelog.info("DoH resolved %s -> %s (ttl %.0fs)", host, ips, ttl)
+                # Kalshi's TTL is 60s, so re-resolves happen every minute and
+                # at INFO they drown the log (145 DoH lines vs 19 real ones in
+                # one session). Log INFO only when the answer is NEW or CHANGED
+                # — routine cache refreshes go to DEBUG. Compare as a SET:
+                # DNS round-robins the order, so the same four IPs come back
+                # shuffled each time and a list compare would never match.
+                if previous is None or set(previous[1]) != set(ips):
+                    filelog.info("DoH resolved %s -> %s (ttl %.0fs)",
+                                 host, ips, ttl)
+                else:
+                    filelog.debug("DoH refreshed %s -> %s (ttl %.0fs)",
+                                  host, ips, ttl)
                 return ips
     return []
 

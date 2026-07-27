@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
+import re
 import time
 from enum import Enum
 from typing import Optional
@@ -97,6 +98,7 @@ class KalshiEngine(QObject):
         # Chart: focused market (ticker, title) na pino-poll kada ilang segundo
         self._chart_focus: Optional[tuple[str, str]] = None
         self._chart_focus_user = False  # pinili ba ng user (huwag i-auto-override)
+        self._watch_log_key = ""  # dedup key ng "Watching:" log lines
         self._chart_task: Optional[asyncio.Task] = None
 
     def set_chart_focus(self, ticker: str, title: str) -> None:
@@ -386,6 +388,20 @@ class KalshiEngine(QObject):
         return float(self._db.get_setting("scan_interval_secs",
                                           SCAN_INTERVAL_SECS))
 
+    def _watch(self, reason: str) -> None:
+        """Ipakita KUNG BAKIT walang straddle — sa screen AT sa log.
+
+        Ang box arb ay matagal talagang nakaupo, at dati ang dahilan ay
+        napupunta lang sa UI status line: hindi masagot ng log ang "bakit
+        hindi nag-trade?". Naka-dedup (tinatanggal ang mga numero sa key)
+        para hindi mag-spam ang 30s scan loop.
+        """
+        self.strategyStatus.emit(reason)
+        key = re.sub(r"[0-9.,+-]+", "#", reason)
+        if key != self._watch_log_key:
+            self._watch_log_key = key
+            self.log("INFO", f"Watching: {reason}")
+
     async def _scan_and_place(self, place: bool = True) -> None:
         cfg = self._scan_config()
         series = [s.strip() for s in
@@ -462,7 +478,7 @@ class KalshiEngine(QObject):
             now, cfg,
         )
         if not ranked:
-            self.strategyStatus.emit(
+            self._watch(
                 f"SCANNING — {len(rows)} markets checked, none in the "
                 f"{cfg.min_entry_cents}-{cfg.max_entry_cents}¢ 50/50 band yet"
             )
@@ -480,7 +496,7 @@ class KalshiEngine(QObject):
                 target = cand
                 break
         if target is None:
-            self.strategyStatus.emit(
+            self._watch(
                 f"WAITING — {len(ranked)} candidate(s) found but a {entry}¢ "
                 f"bid would cross the book (ask ≤ {entry}¢); waiting for a "
                 "wider spread"
@@ -489,7 +505,7 @@ class KalshiEngine(QObject):
 
         count = straddle_sizing(risk, entry, entry)
         if count < 1:
-            self.strategyStatus.emit(
+            self._watch(
                 f"WAITING — risk ${risk:.2f} too small for one "
                 f"{entry}¢+{entry}¢ pair"
             )

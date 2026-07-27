@@ -19,6 +19,7 @@ import asyncio
 import datetime as dt
 import json
 import logging
+import re
 import time
 from enum import Enum
 from typing import Optional
@@ -121,6 +122,7 @@ class PolyBoxEngine(QObject):
         self._traded: set[str] = set()
         self._chart_focus: Optional[tuple[str, str]] = None
         self._chart_focus_user = False
+        self._watch_log_key = ""   # dedup key for "Watching:" log lines
         # Shared connection monitor (internet / binance / polymarket / kalshi);
         # fanned out to both dashboards by main_window.
         self._monitor = ConnectionMonitor(
@@ -270,6 +272,20 @@ class PolyBoxEngine(QObject):
     def _scan_interval(self) -> float:
         return float(self._db.get_setting("scan_interval_secs", SCAN_INTERVAL_SECS))
 
+    def _watch(self, reason: str) -> None:
+        """Show WHY no straddle was placed — on screen AND in the log.
+
+        Box arb legitimately sits idle for long stretches, and until now the
+        reason only went to the UI status line: the log could not answer "why
+        didn't it trade?". Logged deduped (digits stripped from the key) so a
+        30s scan loop doesn't spam the file.
+        """
+        self.strategyStatus.emit(reason)
+        key = re.sub(r"[0-9.,+-]+", "#", reason)
+        if key != self._watch_log_key:
+            self._watch_log_key = key
+            self.log("INFO", f"Watching: {reason}")
+
     async def _scan_and_place(self, place: bool = True) -> None:
         cfg = self._scan_config()
         now = time.time()
@@ -314,7 +330,7 @@ class PolyBoxEngine(QObject):
 
         ranked = rank_candidates(found, now, cfg)
         if not ranked:
-            self.strategyStatus.emit(
+            self._watch(
                 f"SCANNING — {len(rows)} markets, none in the "
                 f"{cfg.min_entry_cents}-{cfg.max_entry_cents}¢ 50/50 band yet")
             return
@@ -324,14 +340,15 @@ class PolyBoxEngine(QObject):
         target = next((c for c in ranked
                        if entry < c.yes_ask and entry < c.no_ask), None)
         if target is None:
-            self.strategyStatus.emit(
+            self._watch(
                 f"WAITING — {len(ranked)} candidate(s) but a {entry}¢ bid would "
                 "cross the book; waiting for a wider spread")
             return
         count = straddle_sizing(risk, entry, entry)
         if count < 1:
-            self.strategyStatus.emit(
-                f"WAITING — risk ${risk:.2f} too small for one {entry}¢+{entry}¢ pair")
+            self._watch(
+                f"WAITING — risk ${risk:.2f} too small for one "
+                f"{entry}¢+{entry}¢ pair")
             return
 
         ref = self._refs.get(target.ticker)
