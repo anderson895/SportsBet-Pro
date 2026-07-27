@@ -57,9 +57,10 @@ DEFAULTS = {
     "hedge_timeout_secs": 90.0,
     "hedge_max_price": 51,
     "hedge_retries": 3,
-    # Mas malawak na lambat = mas maraming 50/50 candidate = mas mataas na
-    # fill rate, nang hindi hinahawakan ang 49¢ entry (box-arb edge)
-    "min_volume": 3000,
+    # USD traded — parehong unit ng Polymarket panel. Mas malawak na lambat
+    # = mas maraming 50/50 candidate = mas mataas na fill rate, nang hindi
+    # hinahawakan ang 49¢ entry (box-arb edge)
+    "min_volume_usd": 10000,
     "min_close_mins": 30.0,
     "max_close_hours": 24.0,
     "paper_start_usd": 1000.0,
@@ -366,7 +367,8 @@ class KalshiEngine(QObject):
         return ScanConfig(
             entry_price_cents=int(float(g("entry_price_cents",
                                           DEFAULTS["entry_price_cents"]))),
-            min_volume=int(float(g("min_volume", DEFAULTS["min_volume"]))),
+            min_volume=int(float(g("min_volume_usd",
+                                   DEFAULTS["min_volume_usd"]))),
             min_secs_to_close=float(g("min_close_mins",
                                       DEFAULTS["min_close_mins"])) * 60,
             max_secs_to_close=float(g("max_close_hours",
@@ -1014,7 +1016,14 @@ def _to_candidate(m: dict) -> Optional[MarketCandidate]:
         yes_ask = _money_cents(m, "yes_ask_dollars", "yes_ask")
         no_bid = _money_cents(m, "no_bid_dollars", "no_bid")
         no_ask = _money_cents(m, "no_ask_dollars", "no_ask")
-        volume = int(float(m.get("volume_fp") or m.get("volume") or 0))
+        # Kalshi counts volume in CONTRACTS, Polymarket in USD. Convert to
+        # dollars here so "Minimum Market Volume" means the same thing on
+        # both panels. Mid price = what one contract is worth (~50¢ for the
+        # 50/50 markets this strategy targets); fall back to 50¢ when the
+        # book is one-sided.
+        contracts = float(m.get("volume_fp") or m.get("volume") or 0)
+        mid_cents = (yes_bid + yes_ask) / 2 if yes_bid and yes_ask else 50.0
+        volume = int(contracts * mid_cents / 100)
         oi = int(float(m.get("open_interest_fp") or m.get("open_interest") or 0))
         title = str(m.get("title", m["ticker"]))
         side_name = str(m.get("yes_sub_title", "")).strip()

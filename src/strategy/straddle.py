@@ -74,7 +74,7 @@ class MarketCandidate:
     yes_ask: int
     no_bid: int
     no_ask: int
-    volume: int           # contracts traded
+    volume: int           # USD traded (both exchanges normalise to dollars)
     close_ts: float       # unix secs ng expected close/expiration
     open_interest: int = 0
 
@@ -84,7 +84,7 @@ class ScanConfig:
     min_entry_cents: int = 48       # parehong side dapat nasa band na ito
     max_entry_cents: int = 52
     entry_price_cents: int = 49     # ang resting bid natin per side
-    min_volume: int = 5000          # contracts — liquidity gate
+    min_volume: int = 10000         # USD traded — liquidity gate
     min_secs_to_close: float = 45 * 60    # iwasan ang malapit nang matapos
     max_secs_to_close: float = 12 * 3600  # iwasan din ang sobrang aga
 
@@ -94,7 +94,7 @@ def is_candidate(
 ) -> tuple[bool, str]:
     """Pasok ba ang market sa straddle criteria? Returns (ok, reason)."""
     if m.volume < cfg.min_volume:
-        return False, f"volume {m.volume:,} < {cfg.min_volume:,} minimum"
+        return False, f"volume ${m.volume:,} < ${cfg.min_volume:,} minimum"
     secs_left = m.close_ts - now_ts
     if secs_left < cfg.min_secs_to_close:
         return False, (f"closes in {secs_left / 60:.0f}min — too close, "

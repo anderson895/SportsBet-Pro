@@ -62,7 +62,7 @@ DEFAULTS = {
     "hedge_timeout_secs": 90.0,
     "hedge_max_price": 51,
     "hedge_retries": 3,
-    "min_volume": 5000,          # USD traded (Gamma volumeNum)
+    "min_volume_usd": 10000,     # USD traded (Gamma volumeNum)
     "min_close_mins": 30.0,
     "max_close_hours": 24.0,
     "paper_start_usdc": 1000.0,
@@ -251,7 +251,8 @@ class PolyBoxEngine(QObject):
         return ScanConfig(
             entry_price_cents=int(float(g("entry_price_cents",
                                           DEFAULTS["entry_price_cents"]))),
-            min_volume=int(float(g("min_volume", DEFAULTS["min_volume"]))),
+            min_volume=int(float(g("min_volume_usd",
+                                   DEFAULTS["min_volume_usd"]))),
             min_secs_to_close=float(g("min_close_mins",
                                       DEFAULTS["min_close_mins"])) * 60,
             max_secs_to_close=float(g("max_close_hours",
@@ -272,6 +273,11 @@ class PolyBoxEngine(QObject):
     def _scan_interval(self) -> float:
         return float(self._db.get_setting("scan_interval_secs", SCAN_INTERVAL_SECS))
 
+    def _leagues(self) -> list[str]:
+        """Selected "Sports to Trade" labels; empty = every sport."""
+        raw = str(self._db.get_setting("sport_leagues", "") or "")
+        return [s.strip() for s in raw.split("|") if s.strip()]
+
     def _watch(self, reason: str) -> None:
         """Show WHY no straddle was placed — on screen AND in the log.
 
@@ -290,7 +296,7 @@ class PolyBoxEngine(QObject):
         cfg = self._scan_config()
         now = time.time()
         try:
-            cands, refs = await scan_markets(self._http)
+            cands, refs = await scan_markets(self._http, self._leagues())
         except Exception as e:
             self.log("WARN", f"Market scan failed: {e}")
             return

@@ -11,10 +11,12 @@ import asyncio
 import time
 
 import qtawesome as qta
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -26,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.core import secrets
+from src.execution.poly_box import SPORT_LEAGUES
 from src.storage.db import ScopedDatabase
 from src.ui import theme
 from src.ui.settings_header import SettingsHeader, recommended_risk
@@ -36,7 +39,7 @@ DEFAULTS = {
     "entry_price_cents": 49,
     "hedge_max_price": 51,
     "hedge_timeout_secs": 90.0,
-    "min_volume": 5000,
+    "min_volume_usd": 10000,
     "min_close_mins": 30.0,
     "max_close_hours": 24.0,
     "paper_start_usdc": 1000.0,
@@ -157,8 +160,8 @@ class PolyBoxSettingsPage(QWidget):
                               DEFAULTS["hedge_timeout_secs"])), "seconds", 3600.0, 5.0)
         add_field("Hedge Sentinel — single-sided timeout", self._hedge_timeout)
 
-        self._min_volume = _spin_i(int(float(g("min_volume",
-                                  DEFAULTS["min_volume"]))), "USD volume", 0)
+        self._min_volume = _spin_i(int(float(g("min_volume_usd",
+                              DEFAULTS["min_volume_usd"]))), "USD volume", 0)
         add_field("Minimum Market Volume", self._min_volume)
 
         self._min_close = _spin_f(float(g("min_close_mins",
@@ -168,6 +171,34 @@ class PolyBoxSettingsPage(QWidget):
         self._max_close = _spin_f(float(g("max_close_hours",
                                  DEFAULTS["max_close_hours"])), "hours", 10_000.0, 0.1)
         add_field("Skip markets closing later than", self._max_close)
+
+        # Sports to trade — same friendly checkboxes as the Kalshi panel.
+        # Without this the scan pulled Polymarket's top markets platform-wide,
+        # which is elections and crypto, not sport.
+        saved_leagues = {s.strip() for s in
+                         str(g("sport_leagues", "")).split("|") if s.strip()}
+        self._sport_cbs: list[QCheckBox] = []
+        sports_grid = QGridLayout()
+        sports_grid.setContentsMargins(0, 2, 0, 0)
+        sports_grid.setHorizontalSpacing(20)
+        sports_grid.setVerticalSpacing(6)
+        for i, (label, _prefixes) in enumerate(SPORT_LEAGUES):
+            cb = QCheckBox(label)
+            cb.setChecked(label in saved_leagues)
+            cb.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._sport_cbs.append(cb)
+            sports_grid.addWidget(cb, i // 2, i % 2)  # 2 columns
+        sports_wrap = QWidget()
+        sports_wrap.setLayout(sports_grid)
+        # Transparent so it blends into the card (no black box behind it)
+        sports_wrap.setStyleSheet("background: transparent;")
+        add_field("Sports to Trade", sports_wrap)
+        sports_hint = QLabel(
+            "Pick the leagues to scan for 50/50 games. Leave all unchecked "
+            "to scan every sport.")
+        sports_hint.setProperty("muted", True)
+        sports_hint.setWordWrap(True)
+        form.addWidget(sports_hint)
 
         self._paper_start = _spin_f(float(g("paper_start_usdc",
                                    DEFAULTS["paper_start_usdc"])), "USDC")
@@ -238,9 +269,12 @@ class PolyBoxSettingsPage(QWidget):
         self._db.set_setting("entry_price_cents", self._entry.value())
         self._db.set_setting("hedge_max_price", self._hedge_max.value())
         self._db.set_setting("hedge_timeout_secs", self._hedge_timeout.value())
-        self._db.set_setting("min_volume", self._min_volume.value())
+        self._db.set_setting("min_volume_usd", self._min_volume.value())
         self._db.set_setting("min_close_mins", self._min_close.value())
         self._db.set_setting("max_close_hours", self._max_close.value())
+        chosen = [label for (label, _p), cb
+                  in zip(SPORT_LEAGUES, self._sport_cbs) if cb.isChecked()]
+        self._db.set_setting("sport_leagues", "|".join(chosen))
         self._db.set_setting("paper_start_usdc", self._paper_start.value())
         self._set_status("Settings saved ✓", theme.GREEN)
         self.modeSaved.emit("LIVE" if self._mode.currentIndex() == 1 else "PAPER")
@@ -301,7 +335,7 @@ class PolyBoxSettingsPage(QWidget):
         self._entry.setValue(DEFAULTS["entry_price_cents"])
         self._hedge_max.setValue(DEFAULTS["hedge_max_price"])
         self._hedge_timeout.setValue(DEFAULTS["hedge_timeout_secs"])
-        self._min_volume.setValue(DEFAULTS["min_volume"])
+        self._min_volume.setValue(DEFAULTS["min_volume_usd"])
         self._set_status(
             f"Recommended values applied — Risk {rec:,.2f} USDC, entry 49¢, "
             "hedge 51¢/90s. Click Save Settings to apply.", theme.AMBER)
@@ -344,7 +378,7 @@ class PolyBoxSettingsPage(QWidget):
         self._entry.setValue(DEFAULTS["entry_price_cents"])
         self._hedge_max.setValue(DEFAULTS["hedge_max_price"])
         self._hedge_timeout.setValue(DEFAULTS["hedge_timeout_secs"])
-        self._min_volume.setValue(DEFAULTS["min_volume"])
+        self._min_volume.setValue(DEFAULTS["min_volume_usd"])
         self._min_close.setValue(DEFAULTS["min_close_mins"])
         self._max_close.setValue(DEFAULTS["max_close_hours"])
         self._paper_start.setValue(DEFAULTS["paper_start_usdc"])

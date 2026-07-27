@@ -35,6 +35,60 @@ filelog = logging.getLogger("sportsbet.poly_box")
 # Reuse the exchange-agnostic paper executor (simulated fills from the book).
 PolyBoxPaperExecutor = KalshiPaperExecutor
 
+# Gamma's umbrella "Sports" tag. One paginated query on this tag returns every
+# sports market ordered by volume, which is far cheaper than one query per
+# league (~12 requests vs ~40) and empirically surfaces the same tradeable
+# ~50/50 games.
+SPORTS_TAG_ID = 1
+SPORTS_PAGE_SIZE = 100
+SPORTS_MAX_PAGES = 12
+
+# Friendly league name -> the prefixes Gamma puts on that league's EVENT slug.
+# Game events are slugged "<league>-<away>-<home>-<date>" (e.g.
+# "mlb-bal-det-2026-07-27"), so the prefix identifies the league without a
+# second API call.
+#
+# Prefixes confirmed live against the API: mlb, nba, wnba, nhl, epl, serie,
+# uefa, mex/liga, atp, wta, ncaa, mls, laliga, lol, cs2, dota2. NFL and
+# Ligue 1 had no in-season game events at the time of writing, so their
+# prefixes follow the same scheme but are unverified — a wrong guess only
+# means that league matches nothing, never a wrong trade.
+SPORT_LEAGUES: list[tuple[str, tuple[str, ...]]] = [
+    ("Baseball — MLB", ("mlb",)),
+    ("Basketball — NBA", ("nba",)),
+    ("Basketball — WNBA", ("wnba",)),
+    ("Basketball — College", ("ncaab", "cbb")),
+    ("Football — NFL", ("nfl",)),
+    ("Football — College", ("ncaa", "ncaaf", "cfb")),
+    ("Hockey — NHL", ("nhl",)),
+    ("Soccer — EPL", ("epl",)),
+    ("Soccer — Champions League", ("uefa",)),
+    ("Soccer — La Liga", ("laliga",)),
+    ("Soccer — Serie A", ("serie",)),
+    ("Soccer — Ligue 1", ("ligue1",)),
+    ("Soccer — MLS", ("mls",)),
+    ("Soccer — Liga MX", ("mex", "liga")),
+    ("Tennis — ATP/WTA", ("atp", "wta")),
+    ("Esports — LoL / CS2 / Dota 2", ("lol", "cs2", "dota2", "val")),
+]
+
+
+def _event_slug(m: dict) -> str:
+    events = m.get("events") or []
+    return str(events[0].get("slug") or "") if events else ""
+
+
+def _league_of(m: dict) -> str:
+    """First path segment of the event slug — the league key (e.g. "mlb")."""
+    return _event_slug(m).split("-")[0].lower()
+
+
+def prefixes_for(labels: list[str]) -> set[str]:
+    """Selected league labels -> the set of event-slug prefixes to keep."""
+    wanted = set(labels)
+    return {p for label, prefixes in SPORT_LEAGUES if label in wanted
+            for p in prefixes}
+
 
 @dataclass(frozen=True)
 class PolyMarketRef:
@@ -80,6 +134,14 @@ def to_candidate(m: dict) -> Optional[tuple[MarketCandidate, PolyMarketRef]]:
 
     yes_bid/ask come from Gamma's bestBid/bestAsk (YES side); the NO book is the
     binary complement.
+
+    Most sports GAME markets are not labelled Yes/No — moneylines are named
+    after the teams ("Boston Red Sox" / "New York Yankees") and totals are
+    "Over"/"Under". They are still two complementary CLOB tokens, so box arb
+    works exactly the same; requiring literal Yes/No silently dropped every
+    game market. For those we map positionally: Gamma's bestBid/bestAsk always
+    quote outcomes[0] (verified against outcomePrices), so outcomes[0] is the
+    "YES" side and outcomes[1] the "NO" side.
     """
     if not m.get("enableOrderBook", True):
         return None
@@ -88,8 +150,10 @@ def to_candidate(m: dict) -> Optional[tuple[MarketCandidate, PolyMarketRef]]:
     if len(outcomes) != 2 or len(tokens) != 2:
         return None
     idx = {str(o).strip().upper(): i for i, o in enumerate(outcomes)}
-    if "YES" not in idx or "NO" not in idx:
-        return None
+    if "YES" in idx and "NO" in idx:
+        yes_i, no_i = idx["YES"], idx["NO"]
+    else:
+        yes_i, no_i = 0, 1
     yes_bid = _cents(m.get("bestBid"))
     yes_ask = _cents(m.get("bestAsk"))
     if yes_bid <= 0 or yes_ask <= 0:
@@ -110,43 +174,59 @@ def to_candidate(m: dict) -> Optional[tuple[MarketCandidate, PolyMarketRef]]:
     ref = PolyMarketRef(
         ticker=cond,
         question=cand.title,
-        yes_token=str(tokens[idx["YES"]]),
-        no_token=str(tokens[idx["NO"]]),
+        yes_token=str(tokens[yes_i]),
+        no_token=str(tokens[no_i]),
     )
     return cand, ref
 
 
 async def scan_markets(
-    client: Optional[httpx.AsyncClient] = None, limit: int = 500
+    client: Optional[httpx.AsyncClient] = None,
+    leagues: Optional[list[str]] = None,
 ) -> tuple[list[MarketCandidate], dict[str, PolyMarketRef]]:
-    """Scan active Polymarket binary markets. Returns (candidates, ref-by-ticker).
+    """Scan active Polymarket SPORTS markets. Returns (candidates, refs).
 
-    Any liquid ~50/50 binary market qualifies — box arb is market-agnostic; the
-    `straddle.is_candidate` band + volume filter picks the tradeable ones.
+    `leagues` are labels from `SPORT_LEAGUES`; an empty/None list means every
+    sport. The `straddle.is_candidate` band + volume filter then picks the
+    tradeable ~50/50 ones.
+
+    Gamma caps `limit` at 100 regardless of what we ask for, so the market list
+    is paged with `offset` — requesting 500 in one call silently returned 100.
     """
     owned = client is None
     http = client or httpx.AsyncClient(timeout=20)
-    params = {
-        "closed": "false", "active": "true", "limit": limit,
-        "order": "volumeNum", "ascending": "false",
-    }
+    keep = prefixes_for(leagues or [])
+    rows: list[dict] = []
     try:
-        resp = await http.get(f"{GAMMA_API}/markets", params=params)
-        resp.raise_for_status()
-        data = resp.json()
+        for page in range(SPORTS_MAX_PAGES):
+            resp = await http.get(f"{GAMMA_API}/markets", params={
+                "closed": "false", "active": "true",
+                "limit": SPORTS_PAGE_SIZE, "offset": page * SPORTS_PAGE_SIZE,
+                "tag_id": SPORTS_TAG_ID,
+                "order": "volumeNum", "ascending": "false",
+            })
+            resp.raise_for_status()
+            data = resp.json()
+            batch = data if isinstance(data, list) else data.get("data", [])
+            rows.extend(batch)
+            if len(batch) < SPORTS_PAGE_SIZE:
+                break
     finally:
         if owned:
             await http.aclose()
-    rows = data if isinstance(data, list) else data.get("data", [])
     cands: list[MarketCandidate] = []
     refs: dict[str, PolyMarketRef] = {}
     for m in rows:
+        if keep and _league_of(m) not in keep:
+            continue
         parsed = to_candidate(m)
         if parsed is None:
             continue
         cand, ref = parsed
         cands.append(cand)
         refs[cand.ticker] = ref
+    filelog.debug("Scanned %d sports markets -> %d candidates (leagues: %s)",
+                  len(rows), len(cands), ", ".join(leagues or ["all"]))
     return cands, refs
 
 

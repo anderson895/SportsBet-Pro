@@ -62,9 +62,10 @@ DEFAULTS = {
     "hedge_timeout_secs": 90.0,
     "hedge_max_price": 51,
     "hedge_retries": 3,
-    # Mas malawak na lambat = mas maraming 50/50 candidate = mas mataas na
-    # fill rate, nang hindi hinahawakan ang 49¢ entry (box-arb edge)
-    "min_volume": 3000,
+    # USD traded — parehong unit ng Polymarket panel. Mas malawak na lambat
+    # = mas maraming 50/50 candidate = mas mataas na fill rate, nang hindi
+    # hinahawakan ang 49¢ entry (box-arb edge)
+    "min_volume_usd": 10000,
     "min_close_mins": 30.0,
     "max_close_hours": 24.0,
     "paper_start_usd": 1000.0,
@@ -213,8 +214,8 @@ class KalshiSettingsPage(QWidget):
         add_field("Hedge Sentinel — single-sided timeout", self._hedge_timeout)
 
         self._min_volume = _spin_i(
-            int(float(g("min_volume", DEFAULTS["min_volume"]))),
-            "contracts", 0,
+            int(float(g("min_volume_usd", DEFAULTS["min_volume_usd"]))),
+            "USD volume", 0,
         )
         add_field("Minimum Market Volume", self._min_volume)
 
@@ -372,7 +373,7 @@ class KalshiSettingsPage(QWidget):
         self._db.set_setting("entry_price_cents", self._entry.value())
         self._db.set_setting("hedge_max_price", self._hedge_max.value())
         self._db.set_setting("hedge_timeout_secs", self._hedge_timeout.value())
-        self._db.set_setting("min_volume", self._min_volume.value())
+        self._db.set_setting("min_volume_usd", self._min_volume.value())
         self._db.set_setting("min_close_mins", self._min_close.value())
         self._db.set_setting("max_close_hours", self._max_close.value())
         chosen = [ticker for (label, ticker), cb
@@ -470,7 +471,7 @@ class KalshiSettingsPage(QWidget):
         self._entry.setValue(DEFAULTS["entry_price_cents"])
         self._hedge_max.setValue(DEFAULTS["hedge_max_price"])
         self._hedge_timeout.setValue(DEFAULTS["hedge_timeout_secs"])
-        self._min_volume.setValue(DEFAULTS["min_volume"])
+        self._min_volume.setValue(DEFAULTS["min_volume_usd"])
         self._min_close.setValue(DEFAULTS["min_close_mins"])
         self._max_close.setValue(DEFAULTS["max_close_hours"])
         self._set_status(
@@ -530,7 +531,7 @@ class KalshiSettingsPage(QWidget):
         self._entry.setValue(DEFAULTS["entry_price_cents"])
         self._hedge_max.setValue(DEFAULTS["hedge_max_price"])
         self._hedge_timeout.setValue(DEFAULTS["hedge_timeout_secs"])
-        self._min_volume.setValue(DEFAULTS["min_volume"])
+        self._min_volume.setValue(DEFAULTS["min_volume_usd"])
         self._min_close.setValue(DEFAULTS["min_close_mins"])
         self._max_close.setValue(DEFAULTS["max_close_hours"])
         self._paper_start.setValue(DEFAULTS["paper_start_usd"])

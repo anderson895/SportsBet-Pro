@@ -106,8 +106,9 @@ class TestCandidateFilter(unittest.TestCase):
         self.assertFalse(ok)
 
     def test_ranking_prefers_volume(self) -> None:
-        low = candidate(ticker="LOW", volume=6000)
-        high = candidate(ticker="HIGH", volume=60000)
+        # Both must clear min_volume — this asserts ordering, not the gate
+        low = candidate(ticker="LOW", volume=15_000)
+        high = candidate(ticker="HIGH", volume=60_000)
         ranked = rank_candidates([low, high], NOW)
         self.assertEqual([m.ticker for m in ranked], ["HIGH", "LOW"])
 
