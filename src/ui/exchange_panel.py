@@ -172,12 +172,15 @@ class ExchangePanel(QWidget):
         self.dash = dashboard
         self.settings = settings_page
         self.logs = LogsPage(db)
-        # Ang "Sync from exchange" ay para lang sa engine na may fill-history
-        # API (Kalshi) — walang button kung wala nito
+        # Ang "Sync from exchange" ay para sa engine na may fill-history API.
+        # Iba ang pangalan kada venue (Kalshi / Polymarket) — hanapin alin ang
+        # meron; walang button kung wala.
+        self._sync_method = next(
+            (m for m in ("sync_fills_from_kalshi", "sync_fills_from_polymarket")
+             if hasattr(engine, m)), None)
         self.trades = TradesPage(
             db, currency,
-            on_sync=(self._on_sync_history
-                     if hasattr(engine, "sync_fills_from_kalshi") else None),
+            on_sync=self._on_sync_history if self._sync_method else None,
         )
         self.stats = StatsPage(db, currency)
         # Clearing the trade history must also refresh stats + the balance card
@@ -272,7 +275,8 @@ class ExchangePanel(QWidget):
         """Kunin ang totoong fill history sa exchange at ipasok sa DB."""
         async def _run() -> None:
             try:
-                imported, total = await self._engine.sync_fills_from_kalshi()
+                sync = getattr(self._engine, self._sync_method)
+                imported, total = await sync()
                 self.trades.reload()
                 self.stats.refresh()
                 self.trades.set_status(

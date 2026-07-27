@@ -158,6 +158,17 @@ class PolymarketClient:
     def cancel_all(self) -> None:
         self._client.cancel_all()
 
+    def get_trades(self) -> list:
+        """Real fill history for this account (ground truth from the CLOB).
+
+        Used by "Sync from exchange" so the Trades table matches the account
+        even if the app was restarted or missed a fill. Read-only.
+        """
+        try:
+            return list(self._client.get_trades() or [])
+        except Exception as e:
+            raise PolymarketError(f"Could not read trade history: {e}") from e
+
     def filled_size(self, order_id: str) -> float:
         """Matched (filled) share count of a resting order. 0 if unknown.
 

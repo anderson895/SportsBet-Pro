@@ -502,6 +502,90 @@ class PolyBoxEngine(QObject):
         except Exception as e:
             filelog.warning("Balance refresh failed: %s", e)
 
+    # ----------------------------------------------------------- history sync
+
+    async def _authed_client(self) -> tuple[PolymarketClient, bool]:
+        """(client, owned) — an authenticated Polymarket client.
+
+        Reuses the live session's client when running; otherwise builds a
+        temporary one from saved credentials so the sync works even while the
+        bot is STOPPED (it is a read-only account query).
+        """
+        if self._live is not None:
+            return self._live, False
+        pk = secret_store.get_secret(secret_store.KEY_PM_PRIVATE)
+        funder = secret_store.get_secret(secret_store.KEY_PM_FUNDER)
+        if not pk or not funder:
+            raise PolymarketError(
+                "Add your Polymarket Private Key and Funder Address in "
+                "Settings first — they are needed to read your account history."
+            )
+        sig = int(self._db.get_setting("pm_signature_type", 1))
+        client = PolymarketClient(private_key=pk, funder=funder,
+                                  signature_type=sig)
+        await asyncio.to_thread(client.connect)
+        return client, True
+
+    async def sync_fills_from_polymarket(self) -> tuple[int, int]:
+        """Import the REAL fill history from Polymarket into the local DB.
+
+        Local rows are written when an order is PLACED, so a restart or a
+        missed fill leaves the Trades table out of step with the account. This
+        pulls ground truth from the CLOB and adds only new fills (deduped by
+        trade id).
+
+        Returns (imported, total seen). Read-only — never places an order.
+        """
+        client, _owned = await self._authed_client()
+        trades = await asyncio.to_thread(client.get_trades)
+
+        imported = 0
+        filled_keys: set[tuple[str, str]] = set()
+        for t in trades:
+            if not isinstance(t, dict):
+                t = getattr(t, "__dict__", {}) or {}
+            market = str(t.get("market") or t.get("condition_id") or "")
+            outcome = str(t.get("outcome") or "").upper() or "?"
+            filled_keys.add((market, outcome))
+
+            trade_id = str(t.get("id") or t.get("trade_id") or "")
+            if not trade_id:
+                continue
+            meta = f"poly_fill:{trade_id}"
+            if self._db.has_trade_meta(meta):
+                continue
+            try:
+                price = float(t.get("price") or 0.0)
+                size = float(t.get("size") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            action = "SELL" if str(t.get("side", "")).upper() == "SELL" else "BUY"
+            self._db.add_trade(
+                market=market, side=outcome, action=action, price=price,
+                size=size * price, status="FILLED", meta=meta,
+                ts=str(t.get("match_time") or "") or None,
+            )
+            imported += 1
+
+        # The exchange is ground truth: hide local "resting" placement rows
+        # that real fills have superseded.
+        superseded = 0
+        for market, side in filled_keys:
+            superseded += self._db.supersede_open_trades(market, side)
+
+        if imported or superseded:
+            self.tradeExecuted.emit()
+            bits = [f"Synced {imported} new fill(s) from Polymarket "
+                    f"({len(trades)} in history)"]
+            if superseded:
+                bits.append(f"replaced {superseded} placeholder row(s)")
+            self.log("INFO", " — ".join(bits))
+        else:
+            filelog.info("Polymarket sync: already up to date (%d trades in "
+                         "history, nothing new)", len(trades))
+        await self._refresh_balance()
+        return imported, len(trades)
+
     # ---------------------------------------------------------- persistence
 
     def _persist_cycle(self) -> None:
