@@ -68,6 +68,7 @@ DEFAULTS = {
     "min_volume_usd": 10000,
     "min_close_mins": 30.0,
     "max_close_hours": 24.0,
+    "max_straddle_pct": 25.0,  # 100 = walang cap
     "paper_start_usd": 1000.0,
 }
 
@@ -194,6 +195,20 @@ class KalshiSettingsPage(QWidget):
         # --- Strategy numbers --------------------------------------------
         self._risk = _spin_f(float(g("risk_usd", DEFAULTS["risk_usd"])), "USD")
         add_field("Risk Per Straddle (USD)", self._risk)
+
+        self._max_pct = _spin_f(
+            float(g("max_straddle_pct", DEFAULTS["max_straddle_pct"])),
+            "% of balance", 100.0, 1.0,
+        )
+        add_field("Max % of balance per straddle", self._max_pct)
+        cap_hint = QLabel(
+            "Blocks a straddle that would risk more than this share of your "
+            "balance — a seatbelt against a mistyped Risk Per Straddle. "
+            "Set it to 100% to trade any size."
+        )
+        cap_hint.setProperty("muted", True)
+        cap_hint.setWordWrap(True)
+        form.addWidget(cap_hint)
 
         self._entry = _spin_i(
             int(float(g("entry_price_cents", DEFAULTS["entry_price_cents"]))),
@@ -370,6 +385,7 @@ class KalshiSettingsPage(QWidget):
         )
         self._db.set_setting("env", self._envs[self._env.currentIndex()][1])
         self._db.set_setting("risk_usd", self._risk.value())
+        self._db.set_setting("max_straddle_pct", self._max_pct.value())
         self._db.set_setting("entry_price_cents", self._entry.value())
         self._db.set_setting("hedge_max_price", self._hedge_max.value())
         self._db.set_setting("hedge_timeout_secs", self._hedge_timeout.value())

@@ -14,7 +14,7 @@ import unittest
 import httpx
 
 from src.core.applog import Outage, err_text
-from src.core.engine_kalshi import MAX_STRADDLE_FRACTION
+from src.core.engine_kalshi import DEFAULTS, NO_STRADDLE_CAP
 from src.strategy.straddle import straddle_sizing
 
 
@@ -67,28 +67,39 @@ class OutageTest(unittest.TestCase):
 
 
 class StraddleSizeGuardTest(unittest.TestCase):
-    """The 2026-07-28 sizing accident, pinned."""
+    """The 2026-07-28 sizing accident, and the cap that now governs it."""
 
     BALANCE = 1_000.0
+    DEFAULT_PCT = DEFAULTS["max_straddle_pct"]
 
     def _cost(self, risk: float, entry: int = 49) -> float:
         return straddle_sizing(risk, entry, entry) * entry * 2 / 100.0
 
-    def test_the_accident_would_now_be_blocked(self) -> None:
-        cost = self._cost(500.0)
-        self.assertAlmostEqual(cost, 494.90, places=2)
-        self.assertGreater(cost, self.BALANCE * MAX_STRADDLE_FRACTION)
+    def _blocked(self, risk: float, cap_pct: float) -> bool:
+        """Mirrors the engine guard: no cap at all once it reaches 100%."""
+        if cap_pct >= NO_STRADDLE_CAP:
+            return False
+        return self._cost(risk) > self.BALANCE * cap_pct / 100.0
 
-    def test_the_intended_risk_is_allowed(self) -> None:
-        cost = self._cost(5.0)
-        self.assertAlmostEqual(cost, 4.90, places=2)
-        self.assertLessEqual(cost, self.BALANCE * MAX_STRADDLE_FRACTION)
+    def test_the_accident_is_blocked_at_the_default_cap(self) -> None:
+        self.assertAlmostEqual(self._cost(500.0), 494.90, places=2)
+        self.assertTrue(self._blocked(500.0, self.DEFAULT_PCT))
 
-    def test_a_quarter_of_the_account_is_the_line(self) -> None:
-        self.assertLessEqual(self._cost(250.0),
-                             self.BALANCE * MAX_STRADDLE_FRACTION)
-        self.assertGreater(self._cost(260.0),
-                           self.BALANCE * MAX_STRADDLE_FRACTION)
+    def test_a_small_risk_passes(self) -> None:
+        self.assertAlmostEqual(self._cost(5.0), 4.90, places=2)
+        self.assertFalse(self._blocked(5.0, self.DEFAULT_PCT))
+
+    def test_the_default_cap_draws_the_line_at_a_quarter(self) -> None:
+        self.assertFalse(self._blocked(250.0, self.DEFAULT_PCT))
+        self.assertTrue(self._blocked(260.0, self.DEFAULT_PCT))
+
+    def test_raising_the_cap_allows_the_bigger_size(self) -> None:
+        self.assertTrue(self._blocked(500.0, 25.0))
+        self.assertFalse(self._blocked(500.0, 50.0))
+
+    def test_one_hundred_percent_disables_the_guard(self) -> None:
+        # Even a straddle larger than the whole balance goes through.
+        self.assertFalse(self._blocked(5_000.0, NO_STRADDLE_CAP))
 
 
 if __name__ == "__main__":

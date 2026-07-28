@@ -50,9 +50,10 @@ filelog = logging.getLogger("sportsbet.engine_kalshi")
 SCAN_INTERVAL_SECS = 30
 FILL_POLL_SECS = 3
 SETTLE_POLL_SECS = 60
-# A single straddle may not risk more than this share of the account — the
-# guard that would have caught a Risk Per Straddle set 100x too high.
-MAX_STRADDLE_FRACTION = 0.25
+# Share of the account a single straddle may risk. Set the setting to 100 to
+# trade any size — the cap is a seatbelt against a mistyped Risk Per
+# Straddle, not a limit on what you are allowed to bet.
+NO_STRADDLE_CAP = 100.0
 STRADDLE_KEY = "open_straddle"  # settings key (naka-scope na sa kalshi)
 
 DEFAULTS = {
@@ -67,6 +68,7 @@ DEFAULTS = {
     "min_volume_usd": 10000,
     "min_close_mins": 30.0,
     "max_close_hours": 24.0,
+    "max_straddle_pct": 25.0,   # 100 = walang cap
     "paper_start_usd": 1000.0,
 }
 
@@ -553,16 +555,19 @@ class KalshiEngine(QObject):
             )
             return
 
-        # Last line of defence against a mistyped Risk Per Straddle: a wrong
-        # setting once sized a $494.90 straddle against a $1,000 balance, and
-        # a failed hedge on it cost half the account.
+        # Seatbelt against a mistyped Risk Per Straddle: a wrong setting once
+        # sized a $494.90 straddle against a $1,000 balance, and a failed
+        # hedge on it cost half the account. Set the cap to 100% to disable.
         cost = count * entry * 2 / 100.0
+        cap_pct = float(self._db.get_setting("max_straddle_pct",
+                                             DEFAULTS["max_straddle_pct"]))
         balance = self._account_balance()
-        if balance and cost > balance * MAX_STRADDLE_FRACTION:
+        if balance and cap_pct < NO_STRADDLE_CAP and (
+                cost > balance * cap_pct / 100.0):
             self._watch(
-                f"BLOCKED — ${cost:,.2f} straddle is over "
-                f"{MAX_STRADDLE_FRACTION:.0%} of the ${balance:,.2f} balance. "
-                f"Lower Risk Per Straddle (currently ${risk:,.2f})"
+                f"BLOCKED — ${cost:,.2f} straddle is over {cap_pct:.0f}% of "
+                f"the ${balance:,.2f} balance. Raise 'Max % of balance per "
+                f"straddle' or lower Risk Per Straddle (now ${risk:,.2f})"
             )
             return
 
