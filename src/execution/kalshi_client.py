@@ -19,6 +19,7 @@ from typing import Any, Optional
 
 import httpx
 
+from src.core.applog import err_text
 from src.execution.kalshi_auth import auth_headers, load_private_key
 
 filelog = logging.getLogger("sportsbet.kalshi_client")
@@ -112,7 +113,8 @@ class KalshiClient:
             return resp.json()
 
         raise KalshiError(
-            f"Kalshi API {method} {endpoint} failed after retries: {last_exc}"
+            f"Kalshi API {method} {endpoint} failed after retries: "
+            f"{err_text(last_exc) if last_exc else 'unknown error'}"
         )
 
     # ------------------------------------------------------ public endpoints

@@ -25,6 +25,7 @@ from typing import Optional
 from PySide6.QtCore import QObject, Signal
 
 from src.core import secrets as secret_store
+from src.core.applog import Outage, err_text
 from src.execution.kalshi_client import (
     KalshiClient,
     KalshiError,
@@ -49,6 +50,9 @@ filelog = logging.getLogger("sportsbet.engine_kalshi")
 SCAN_INTERVAL_SECS = 30
 FILL_POLL_SECS = 3
 SETTLE_POLL_SECS = 60
+# A single straddle may not risk more than this share of the account — the
+# guard that would have caught a Risk Per Straddle set 100x too high.
+MAX_STRADDLE_FRACTION = 0.25
 STRADDLE_KEY = "open_straddle"  # settings key (naka-scope na sa kalshi)
 
 DEFAULTS = {
@@ -100,6 +104,8 @@ class KalshiEngine(QObject):
         self._chart_focus: Optional[tuple[str, str]] = None
         self._chart_focus_user = False  # pinili ba ng user (huwag i-auto-override)
         self._watch_log_key = ""  # dedup key ng "Watching:" log lines
+        self._outage = Outage()   # quiet + slower retries habang offline
+        self._last_balance: Optional[float] = None  # huli mula sa live API
         self._chart_task: Optional[asyncio.Task] = None
 
     def set_chart_focus(self, ticker: str, title: str) -> None:
@@ -281,7 +287,8 @@ class KalshiEngine(QObject):
                 trading = self.state is BotState.RUNNING and self._session_ready
                 if trading and self._cycle is None:
                     await self._scan_and_place(place=True)
-                    await asyncio.sleep(self._scan_interval())
+                    await asyncio.sleep(
+                        self._outage.delay(self._scan_interval()))
                 elif trading and self._cycle.state is CycleState.UNHEDGED_HOLD:
                     await self._scan_and_place(place=False)
                     await self._watch_settlement()
@@ -292,7 +299,8 @@ class KalshiEngine(QObject):
                 else:
                     # STOPPED o naghahanda pa: read-only market feed lang
                     await self._scan_and_place(place=False)
-                    await asyncio.sleep(self._scan_interval())
+                    await asyncio.sleep(
+                        self._outage.delay(self._scan_interval()))
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -316,6 +324,7 @@ class KalshiEngine(QObject):
             balance = await self._client.get_balance()  # creds check
             self.executor = KalshiLiveExecutor(self._client)
             self.modeChanged.emit("LIVE")
+            self._last_balance = balance
             self.liveBalance.emit(balance)
             self._balance_task = asyncio.create_task(self._balance_loop())
             self.log("INFO", f"LIVE mode ready [{env}] — balance "
@@ -390,6 +399,18 @@ class KalshiEngine(QObject):
         return float(self._db.get_setting("scan_interval_secs",
                                           SCAN_INTERVAL_SECS))
 
+    def _account_balance(self) -> Optional[float]:
+        """Balance to size-check against; None when it is not known yet.
+
+        Paper has no real account, so the dashboard's convention is used:
+        starting balance plus realized PnL.
+        """
+        if self.executor is not None and self.executor.MODE == "PAPER":
+            start = float(self._db.get_setting("paper_start_usd",
+                                               DEFAULTS["paper_start_usd"]))
+            return start + self._db.total_pnl()
+        return self._last_balance
+
     def _watch(self, reason: str) -> None:
         """Ipakita KUNG BAKIT walang straddle — sa screen AT sa log.
 
@@ -413,12 +434,17 @@ class KalshiEngine(QObject):
         found: list[MarketCandidate] = []
         rows: list[dict] = []
 
+        # One warning per CYCLE, not per series — a dead network used to emit
+        # 14 near-identical lines every 30s.
+        failed: list[str] = []
+        last_err = ""
         for ticker in series[:14]:
             try:
                 data = await self._client.get_markets(
                     series_ticker=ticker, limit=200)
             except Exception as e:
-                self.log("WARN", f"Market scan failed for {ticker}: {e}")
+                failed.append(ticker)
+                last_err = err_text(e)
                 continue
             for m in data.get("markets", []):
                 cand = _to_candidate(m)
@@ -434,6 +460,20 @@ class KalshiEngine(QObject):
                 })
                 if ok and cand.ticker not in self._traded_tickers:
                     found.append(cand)
+
+        if failed and len(failed) == len(series[:14]):
+            msg = self._outage.fail(
+                f"Market scan failed for all {len(failed)} series: {last_err}")
+            if msg:
+                self.log("WARN", msg)
+            return
+        if failed:
+            self.log("WARN", f"Market scan failed for {len(failed)} of "
+                             f"{len(series[:14])} series ({', '.join(failed)}):"
+                             f" {last_err}")
+        back = self._outage.recover()
+        if back:
+            self.log("INFO", back)
 
         rows.sort(key=lambda r: -r["volume"])
         # Ipasa ang MARAMI (hindi lang 50) — may search na sa UI para
@@ -513,6 +553,19 @@ class KalshiEngine(QObject):
             )
             return
 
+        # Last line of defence against a mistyped Risk Per Straddle: a wrong
+        # setting once sized a $494.90 straddle against a $1,000 balance, and
+        # a failed hedge on it cost half the account.
+        cost = count * entry * 2 / 100.0
+        balance = self._account_balance()
+        if balance and cost > balance * MAX_STRADDLE_FRACTION:
+            self._watch(
+                f"BLOCKED — ${cost:,.2f} straddle is over "
+                f"{MAX_STRADDLE_FRACTION:.0%} of the ${balance:,.2f} balance. "
+                f"Lower Risk Per Straddle (currently ${risk:,.2f})"
+            )
+            return
+
         try:
             await self.executor.place_straddle(target.ticker, entry, count)
         except Exception as e:
@@ -537,7 +590,6 @@ class KalshiEngine(QObject):
         self._cycle_title = target.title
         self._traded_tickers.add(target.ticker)
         self._persist_cycle()
-        cost = count * entry * 2 / 100.0
         for side in ("YES", "NO"):
             self._db.add_trade(
                 market=target.ticker, side=side, action="BUY",
@@ -548,7 +600,8 @@ class KalshiEngine(QObject):
         tag = self.executor.MODE
         self.log("TRADE", f"[{tag}] STRADDLE placed on {target.ticker}: "
                           f"BUY {count} YES @ {entry}¢ + {count} NO @ {entry}¢ "
-                          f"(${cost:,.2f}) — {target.title}")
+                          f"(${cost:,.2f} from ${risk:,.2f} risk) — "
+                          f"{target.title}")
         self.strategyStatus.emit(
             f"STRADDLE WORKING — {target.ticker} ({count} pairs @ {entry}¢)"
         )
@@ -703,6 +756,7 @@ class KalshiEngine(QObject):
             try:
                 balance = await self.executor.get_balance()
                 if balance is not None:
+                    self._last_balance = balance
                     self.liveBalance.emit(balance)
                 failed_logged = False
                 await asyncio.sleep(60)
@@ -720,9 +774,10 @@ class KalshiEngine(QObject):
         try:
             balance = await self.executor.get_balance()
             if balance is not None:
+                self._last_balance = balance
                 self.liveBalance.emit(balance)
         except Exception as e:
-            filelog.warning("Balance refresh failed: %s", e)
+            filelog.warning("Balance refresh failed: %s", err_text(e))
 
     # ----------------------------------------------------------- history sync
 

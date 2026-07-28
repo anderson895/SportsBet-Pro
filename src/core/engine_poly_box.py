@@ -28,6 +28,7 @@ import httpx
 from PySide6.QtCore import QObject, Signal
 
 from src.core import secrets as secret_store
+from src.core.applog import Outage, err_text
 from src.core.status import ConnectionMonitor
 from src.execution.poly_box import (
     PolyBoxLiveExecutor,
@@ -55,6 +56,8 @@ SCAN_INTERVAL_SECS = 30
 FILL_POLL_SECS = 3
 SETTLE_POLL_SECS = 60
 STRADDLE_KEY = "open_straddle"
+# A single straddle may not risk more than this share of the account.
+MAX_STRADDLE_FRACTION = 0.25
 
 DEFAULTS = {
     "risk_usdc": 100.0,
@@ -123,6 +126,8 @@ class PolyBoxEngine(QObject):
         self._chart_focus: Optional[tuple[str, str]] = None
         self._chart_focus_user = False
         self._watch_log_key = ""   # dedup key for "Watching:" log lines
+        self._outage = Outage()    # quiet + slower retries while offline
+        self._last_balance: Optional[float] = None  # last from the live API
         # Shared connection monitor (internet / binance / polymarket / kalshi);
         # fanned out to both dashboards by main_window.
         self._monitor = ConnectionMonitor(
@@ -207,6 +212,7 @@ class PolyBoxEngine(QObject):
             self._live = client
             self.executor = PolyBoxLiveExecutor(client)
             self.modeChanged.emit("LIVE")
+            self._last_balance = balance
             self.liveBalance.emit(balance)
             self._balance_task = asyncio.create_task(self._balance_loop())
             self.log("INFO", f"LIVE mode ready — balance ${balance:,.2f}")
@@ -226,7 +232,8 @@ class PolyBoxEngine(QObject):
                 trading = self.state is BotState.RUNNING and self._session_ready
                 if trading and self._cycle is None:
                     await self._scan_and_place(place=True)
-                    await asyncio.sleep(self._scan_interval())
+                    await asyncio.sleep(
+                        self._outage.delay(self._scan_interval()))
                 elif trading and self._cycle.state is CycleState.UNHEDGED_HOLD:
                     await self._scan_and_place(place=False)
                     await self._watch_settlement()
@@ -236,7 +243,8 @@ class PolyBoxEngine(QObject):
                     await asyncio.sleep(FILL_POLL_SECS)
                 else:
                     await self._scan_and_place(place=False)
-                    await asyncio.sleep(self._scan_interval())
+                    await asyncio.sleep(
+                        self._outage.delay(self._scan_interval()))
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -273,6 +281,14 @@ class PolyBoxEngine(QObject):
     def _scan_interval(self) -> float:
         return float(self._db.get_setting("scan_interval_secs", SCAN_INTERVAL_SECS))
 
+    def _account_balance(self) -> Optional[float]:
+        """Balance to size-check against; None when it is not known yet."""
+        if self.executor is not None and self.executor.MODE == "PAPER":
+            start = float(self._db.get_setting("paper_start_usdc",
+                                               DEFAULTS["paper_start_usdc"]))
+            return start + self._db.total_pnl()
+        return self._last_balance
+
     def _leagues(self) -> list[str]:
         """Selected "Sports to Trade" labels; empty = every sport."""
         raw = str(self._db.get_setting("sport_leagues", "") or "")
@@ -298,8 +314,13 @@ class PolyBoxEngine(QObject):
         try:
             cands, refs = await scan_markets(self._http, self._leagues())
         except Exception as e:
-            self.log("WARN", f"Market scan failed: {e}")
+            msg = self._outage.fail(f"Market scan failed: {err_text(e)}")
+            if msg:
+                self.log("WARN", msg)
             return
+        back = self._outage.recover()
+        if back:
+            self.log("INFO", back)
         self._refs.update(refs)
         rows: list[dict] = []
         found = []
@@ -357,6 +378,17 @@ class PolyBoxEngine(QObject):
                 f"{entry}¢+{entry}¢ pair")
             return
 
+        # Last line of defence against a mistyped Risk Per Straddle — see the
+        # matching guard in engine_kalshi.
+        cost = count * entry * 2 / 100.0
+        balance = self._account_balance()
+        if balance and cost > balance * MAX_STRADDLE_FRACTION:
+            self._watch(
+                f"BLOCKED — ${cost:,.2f} straddle is over "
+                f"{MAX_STRADDLE_FRACTION:.0%} of the ${balance:,.2f} balance. "
+                f"Lower Risk Per Straddle (currently ${risk:,.2f})")
+            return
+
         ref = self._refs.get(target.ticker)
         if isinstance(self.executor, PolyBoxLiveExecutor) and ref is not None:
             self.executor.set_market(ref)
@@ -373,7 +405,6 @@ class PolyBoxEngine(QObject):
         self._cycle_ref = ref
         self._traded.add(target.ticker)
         self._persist_cycle()
-        cost = count * entry * 2 / 100.0
         for side in ("YES", "NO"):
             self._db.add_trade(market=target.ticker, side=side, action="BUY",
                                price=entry / 100.0, size=count * entry / 100.0,
@@ -381,7 +412,8 @@ class PolyBoxEngine(QObject):
         self.tradeExecuted.emit()
         self.log("TRADE", f"[{self.executor.MODE}] STRADDLE placed on "
                           f"{target.title}: BUY {count} YES @ {entry}¢ + "
-                          f"{count} NO @ {entry}¢ (${cost:,.2f})")
+                          f"{count} NO @ {entry}¢ "
+                          f"(${cost:,.2f} from ${risk:,.2f} risk)")
         self.strategyStatus.emit(
             f"STRADDLE WORKING — {target.title} ({count} pairs @ {entry}¢)")
 
@@ -524,6 +556,7 @@ class PolyBoxEngine(QObject):
             try:
                 bal = await self.executor.get_balance()
                 if bal is not None:
+                    self._last_balance = bal
                     self.liveBalance.emit(bal)
                 failed = False
                 await asyncio.sleep(60)
@@ -539,6 +572,7 @@ class PolyBoxEngine(QObject):
         try:
             bal = await self.executor.get_balance()
             if bal is not None:
+                self._last_balance = bal
                 self.liveBalance.emit(bal)
         except Exception as e:
             filelog.warning("Balance refresh failed: %s", e)
