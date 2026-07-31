@@ -141,7 +141,12 @@ class CycleState(Enum):
 class SentinelConfig:
     hedge_timeout_secs: float = 90.0   # ONE_FILLED nang ganito katagal -> hedge
     hedge_max_price_cents: int = 51    # max na babayaran para sa hedge side
-    hedge_retries: int = 3             # ilang polls susubukan ang hedge
+    # Ilang beses susubukan ang hedge bago sumuko, at gaano kalayo ang
+    # pagitan. Dating 3 polls sa 3s cadence = ~9 segundo lang, na sumusuko
+    # kahit 1¢ na lang ang layo ng ask sa cap — halos walang tsansang
+    # bumalik ang presyo sa loob niyon.
+    hedge_retries: int = 20
+    hedge_retry_secs: float = 6.0
     stale_cancel_secs: float = 15 * 60  # RESTING_BOTH nang walang fill -> cancel
 
 

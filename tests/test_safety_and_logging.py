@@ -9,13 +9,17 @@ safety, each covered here:
 - half of those warnings ending at the colon, because httpx timeouts carry
   no message
 """
+import asyncio
+import time
 import unittest
 
 import httpx
 
 from src.core.applog import Outage, err_text
 from src.core.engine_kalshi import DEFAULTS, NO_STRADDLE_CAP
-from src.strategy.straddle import straddle_sizing
+from src.execution.kalshi_client import _MIN_REQUEST_GAP as MIN_REQUEST_GAP
+from src.execution.kalshi_client import KalshiClient
+from src.strategy.straddle import SentinelConfig, straddle_sizing
 
 
 class ErrTextTest(unittest.TestCase):
@@ -100,6 +104,50 @@ class StraddleSizeGuardTest(unittest.TestCase):
     def test_one_hundred_percent_disables_the_guard(self) -> None:
         # Even a straddle larger than the whole balance goes through.
         self.assertFalse(self._blocked(5_000.0, NO_STRADDLE_CAP))
+
+
+class RequestThrottleTest(unittest.TestCase):
+    """The scan fired 14 series calls back-to-back and stayed rate-limited
+    (HTTP 429) for ~20 hours. Requests are paced inside the client now."""
+
+    def _elapsed_for(self, calls: int, gap: float) -> float:
+        client = KalshiClient(min_request_gap=gap)
+
+        async def run() -> float:
+            start = time.monotonic()
+            for _ in range(calls):
+                await client._wait_turn()
+            return time.monotonic() - start
+
+        return asyncio.run(run())
+
+    def test_requests_are_spaced_apart(self) -> None:
+        # 5 calls at a 20ms gap must take at least the 4 intervening gaps
+        self.assertGreaterEqual(self._elapsed_for(5, 0.02), 0.07)
+
+    def test_a_zero_gap_disables_pacing(self) -> None:
+        self.assertLess(self._elapsed_for(50, 0.0), 0.05)
+
+    def test_the_shipped_gap_keeps_a_full_scan_under_ten_seconds(self) -> None:
+        # 14 sports series per scan cycle, every 30 seconds
+        self.assertLess(14 * MIN_REQUEST_GAP, 10.0)
+
+
+class HedgeWindowTest(unittest.TestCase):
+    """The sentinel used to give up after ~9 seconds, sometimes with the ask
+    a single cent above the cap."""
+
+    def test_the_old_window_was_about_nine_seconds(self) -> None:
+        self.assertAlmostEqual(3 * 3.0, 9.0)  # 3 polls at the fill cadence
+
+    def test_the_default_window_is_now_minutes(self) -> None:
+        cfg = SentinelConfig()
+        window = cfg.hedge_retries * cfg.hedge_retry_secs
+        self.assertGreaterEqual(window, 60.0)
+
+    def test_the_window_is_the_product_of_both_settings(self) -> None:
+        cfg = SentinelConfig(hedge_retries=10, hedge_retry_secs=12.0)
+        self.assertEqual(cfg.hedge_retries * cfg.hedge_retry_secs, 120.0)
 
 
 if __name__ == "__main__":

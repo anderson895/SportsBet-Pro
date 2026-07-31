@@ -64,7 +64,8 @@ DEFAULTS = {
     "entry_price_cents": 49,
     "hedge_timeout_secs": 90.0,
     "hedge_max_price": 51,
-    "hedge_retries": 3,
+    "hedge_retries": 20,
+    "hedge_retry_secs": 6.0,
     "min_volume_usd": 10000,     # USD traded (Gamma volumeNum)
     "min_close_mins": 30.0,
     "max_close_hours": 24.0,
@@ -241,7 +242,7 @@ class PolyBoxEngine(QObject):
                     await asyncio.sleep(SETTLE_POLL_SECS)
                 elif trading:
                     await self._monitor_cycle()
-                    await asyncio.sleep(FILL_POLL_SECS)
+                    await asyncio.sleep(self._poll_interval())
                 else:
                     await self._scan_and_place(place=False)
                     await asyncio.sleep(
@@ -277,10 +278,19 @@ class PolyBoxEngine(QObject):
                                               DEFAULTS["hedge_max_price"]))),
             hedge_retries=int(float(g("hedge_retries",
                                       DEFAULTS["hedge_retries"]))),
+            hedge_retry_secs=float(g("hedge_retry_secs",
+                                     DEFAULTS["hedge_retry_secs"])),
         )
 
     def _scan_interval(self) -> float:
         return float(self._db.get_setting("scan_interval_secs", SCAN_INTERVAL_SECS))
+
+    def _poll_interval(self) -> float:
+        """Fills are polled fast; hedge retries deliberately slower — see the
+        matching helper in engine_kalshi."""
+        if self._cycle is not None and self._cycle.state is CycleState.HEDGING:
+            return self._cycle.cfg.hedge_retry_secs
+        return FILL_POLL_SECS
 
     def _account_balance(self) -> Optional[float]:
         """Balance to size-check against; None when it is not known yet."""

@@ -61,7 +61,8 @@ DEFAULTS = {
     "entry_price_cents": 49,
     "hedge_timeout_secs": 90.0,
     "hedge_max_price": 51,
-    "hedge_retries": 3,
+    "hedge_retries": 20,
+    "hedge_retry_secs": 6.0,
     # USD traded — parehong unit ng Polymarket panel. Mas malawak na lambat
     # = mas maraming 50/50 candidate = mas mataas na fill rate, nang hindi
     # hinahawakan ang 49¢ entry (box-arb edge)
@@ -107,6 +108,7 @@ class KalshiEngine(QObject):
         self._chart_focus_user = False  # pinili ba ng user (huwag i-auto-override)
         self._watch_log_key = ""  # dedup key ng "Watching:" log lines
         self._outage = Outage()   # quiet + slower retries habang offline
+        self._settle_outage = Outage()  # hiwalay — ibang loop ang settlement
         self._last_balance: Optional[float] = None  # huli mula sa live API
         self._chart_task: Optional[asyncio.Task] = None
 
@@ -297,7 +299,7 @@ class KalshiEngine(QObject):
                     await asyncio.sleep(SETTLE_POLL_SECS)
                 elif trading:
                     await self._monitor_cycle()
-                    await asyncio.sleep(FILL_POLL_SECS)
+                    await asyncio.sleep(self._poll_interval())
                 else:
                     # STOPPED o naghahanda pa: read-only market feed lang
                     await self._scan_and_place(place=False)
@@ -395,11 +397,20 @@ class KalshiEngine(QObject):
                                               DEFAULTS["hedge_max_price"]))),
             hedge_retries=int(float(g("hedge_retries",
                                       DEFAULTS["hedge_retries"]))),
+            hedge_retry_secs=float(g("hedge_retry_secs",
+                                     DEFAULTS["hedge_retry_secs"])),
         )
 
     def _scan_interval(self) -> float:
         return float(self._db.get_setting("scan_interval_secs",
                                           SCAN_INTERVAL_SECS))
+
+    def _poll_interval(self) -> float:
+        """Fills are polled fast; hedge retries deliberately slower so the
+        ask has time to come back within the cap before we give up."""
+        if self._cycle is not None and self._cycle.state is CycleState.HEDGING:
+            return self._cycle.cfg.hedge_retry_secs
+        return FILL_POLL_SECS
 
     def _account_balance(self) -> Optional[float]:
         """Balance to size-check against; None when it is not known yet.
@@ -728,8 +739,16 @@ class KalshiEngine(QObject):
         try:
             market = await self._client.get_market(cycle.ticker)
         except Exception as e:
-            filelog.warning("Settlement check failed: %s", e)
+            # Same treatment as the scan: a 21-hour outage otherwise wrote a
+            # settlement warning every 13 minutes for the whole stretch.
+            msg = self._settle_outage.fail(
+                f"Settlement check failed for {cycle.ticker}: {err_text(e)}")
+            if msg:
+                self.log("WARN", msg)
             return
+        back = self._settle_outage.recover()
+        if back:
+            self.log("INFO", f"Settlement checks {back.lower()}")
         status = str(market.get("status", "")).lower()
         result = str(market.get("result", "")).lower()
         self.straddleStatus.emit(

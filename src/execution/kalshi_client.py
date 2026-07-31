@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from typing import Any, Optional
 
@@ -32,6 +33,12 @@ ENV_BASES = {"prod": PROD_BASE, "demo": DEMO_BASE}
 
 _RETRY_STATUS = (429, 502, 503)
 _MAX_RETRIES = 3
+
+# Minimum gap between any two requests. A market scan fires one call per
+# sports series back-to-back, which kept the client rate-limited (HTTP 429)
+# for ~20 hours straight. Pacing here covers every call site, not just the
+# scan loop, and 14 series still complete in about 3.5 seconds.
+_MIN_REQUEST_GAP = 0.25
 
 
 class KalshiError(Exception):
@@ -52,11 +59,15 @@ class KalshiClient:
         private_key_pem: Optional[str] = None,
         base_url: Optional[str] = None,   # override para sa tests
         client: Optional[httpx.AsyncClient] = None,
+        min_request_gap: float = _MIN_REQUEST_GAP,  # 0 para sa tests
     ) -> None:
         self._base = (base_url or ENV_BASES.get(env, PROD_BASE)).rstrip("/")
         self._key_id = key_id
         self._key = load_private_key(private_key_pem) if private_key_pem else None
         self._client = client or httpx.AsyncClient(timeout=15)
+        self._min_gap = min_request_gap
+        self._rate_lock = asyncio.Lock()
+        self._last_request_ts = 0.0
 
     @property
     def has_auth(self) -> bool:
@@ -66,6 +77,17 @@ class KalshiClient:
         await self._client.aclose()
 
     # ------------------------------------------------------------- plumbing
+
+    async def _wait_turn(self) -> None:
+        """Hold the caller until `_MIN_REQUEST_GAP` has passed since the last
+        request, so a burst of series calls does not trip the rate limit."""
+        if self._min_gap <= 0:
+            return
+        async with self._rate_lock:
+            gap = time.monotonic() - self._last_request_ts
+            if gap < self._min_gap:
+                await asyncio.sleep(self._min_gap - gap)
+            self._last_request_ts = time.monotonic()
 
     async def _request(
         self,
@@ -88,6 +110,7 @@ class KalshiClient:
                 # Bagong timestamp/signature KADA attempt — may expiry ang ts
                 headers = auth_headers(self._key_id, self._key, method, path)
             try:
+                await self._wait_turn()
                 resp = await self._client.request(
                     method, url, params=params, json=json_body, headers=headers
                 )
@@ -97,7 +120,9 @@ class KalshiClient:
                 continue
 
             if resp.status_code in _RETRY_STATUS:
-                filelog.warning(
+                # These recover on the next attempt; only the final give-up is
+                # worth a WARNING, and that is raised below.
+                filelog.debug(
                     "Kalshi %s %s -> %s (retry %d)",
                     method, endpoint, resp.status_code, attempt + 1,
                 )

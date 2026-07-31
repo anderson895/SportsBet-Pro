@@ -39,6 +39,8 @@ DEFAULTS = {
     "entry_price_cents": 49,
     "hedge_max_price": 51,
     "hedge_timeout_secs": 90.0,
+    "hedge_retries": 20,
+    "hedge_retry_secs": 6.0,
     "min_volume_usd": 10000,
     "min_close_mins": 30.0,
     "max_close_hours": 24.0,
@@ -173,6 +175,24 @@ class PolyBoxSettingsPage(QWidget):
                               DEFAULTS["hedge_timeout_secs"])), "seconds", 3600.0, 5.0)
         add_field("Hedge Sentinel — single-sided timeout", self._hedge_timeout)
 
+        self._hedge_retries = _spin_i(
+            int(float(g("hedge_retries", DEFAULTS["hedge_retries"]))),
+            "attempts", 1, 200)
+        add_field("Hedge Sentinel — attempts before giving up",
+                  self._hedge_retries)
+
+        self._hedge_gap = _spin_f(
+            float(g("hedge_retry_secs", DEFAULTS["hedge_retry_secs"])),
+            "seconds apart", 300.0, 1.0)
+        add_field("Hedge Sentinel — gap between attempts", self._hedge_gap)
+        hedge_hint = QLabel(
+            "Attempts × gap is how long the bot chases the hedge before it "
+            "holds one side to settlement. Too short and it gives up while "
+            "the ask is still a cent above your cap.")
+        hedge_hint.setProperty("muted", True)
+        hedge_hint.setWordWrap(True)
+        form.addWidget(hedge_hint)
+
         self._min_volume = _spin_i(int(float(g("min_volume_usd",
                               DEFAULTS["min_volume_usd"]))), "USD volume", 0)
         add_field("Minimum Market Volume", self._min_volume)
@@ -283,6 +303,8 @@ class PolyBoxSettingsPage(QWidget):
         self._db.set_setting("entry_price_cents", self._entry.value())
         self._db.set_setting("hedge_max_price", self._hedge_max.value())
         self._db.set_setting("hedge_timeout_secs", self._hedge_timeout.value())
+        self._db.set_setting("hedge_retries", self._hedge_retries.value())
+        self._db.set_setting("hedge_retry_secs", self._hedge_gap.value())
         self._db.set_setting("min_volume_usd", self._min_volume.value())
         self._db.set_setting("min_close_mins", self._min_close.value())
         self._db.set_setting("max_close_hours", self._max_close.value())
